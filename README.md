@@ -1,162 +1,106 @@
-> **2026-09-26 update** - see [`FINDINGS-2026-09-26.md`](FINDINGS-2026-09-26.md).
-> Summary: the USB log is now verified working on hardware, but only with an
-> image that forces the 8 KB gserial channel allocation
-> (`images/uboot-v26-forceport.img`).  The v1..v25 images could never
-> produce data, because u-boot skips the channel allocation on the
-> "port open timeout" path (`usb calibrate port open timeout`).
-> `[0x30]` must stay 0x75EF0 (it is the sechdr offset base read by vboot).
-> The `uboot_log` partition only records *successful* boots (verified: a
-> boot that stalls at any step leaves no record), so it cannot be used to
-> debug unbootable devices - see `tools/dump_uboot_log.sh`.
+# uboot-usblog - DW99 / vp19 (Spreadtrum SL8541E) uboot USB log capture
 
-# uboot-usblog — DW99 / vp19（展锐 SL8541E）uboot USB 日志抓取
+Patch a Spreadtrum u-boot so that its boot log streams out over USB in real
+time, and read it from a host with libusb.  No device disassembly, no UART.
+Built for debugging DW99 / vp19 watches (e.g. the 4.4 / 4.4.302 kernel line
+that "does not boot and prints nothing").
 
-给展锐 uboot 打补丁，把启动日志从 USB 口实时输出，主机用 libusb 抓取。
-**免拆机、免串口**，用于 DW99 / vp19 手表的启动调试（例：4.4 → 4.4.302 内核线「不开机、无日志」排查）。
+> **Status 2026-09-26**: the live USB log has been verified on real hardware
+> (recipe below), and the root cause why v1..v25 never received a single byte
+> has been found.  Details in `FINDINGS-2026-09-26.md`.
+>
+> (This README was rewritten in English because the authoring environment
+> silently corrupts non-ASCII input.  A Chinese version is welcome as a PR.)
 
-- 设备侧链路：`puts()` hook → `usb_log_puts()` → gserial TX 环形缓冲 → bulk EP5-IN（`1782:4d00`）
-- 主机侧工具：`tools/uboot_usb_log.py`（libusb-1.0 via ctypes，无第三方依赖）
-- 逆向时间：2026-08 ~ 2026-09；配套反汇编：`analysis/uboot.asm`
+## 1. Working recipe (verified 2026-09-26, both parts required)
 
-> 所有补丁地址均为**镜像文件偏移**；运行时 VA = 文件偏移 + 0x9EFFFE00（file 0x200 → 0x9F000000）。
+### 1.1 Console hook
+- `file 0xE798` (puts entry) -> `b` to `0x1BC34`, inside a never-called
+  function body in the dead-code area.
+- Hook: redo the prologue -> call the log fn -> jump back to `0xE79C`.
+- Log fn at `0x1BC4C`: read the gate byte (`0x1BC34`, value 0 in the image)
+  -> if 0, return immediately; otherwise clear the gate first (re-entrancy
+  guard) -> strlen -> `bl 0x1A8BC` (reply_to_pctool) -> restore the gate.
+- The gate is set at `file 0x1A768`, the printf call site of
+  "USB SERIAL PORT OPENED".
 
-## 1. 背景
+### 1.2 Force the channel allocation (the critical part)
+- Without a tool handshake u-boot prints
+  `usb calibrate port open timeout3871,1870,2000` and **skips the 8 KB
+  gserial channel allocation** (the `bl 0x9F02CDFC` sits on the
+  "port opened" branch).
+- Patching `file 0x1A720` from `cbnz w0,+0x38` to `b +0x38` (= v26) makes
+  u-boot allocate the channel, which is what lets any byte reach the host.
+- Gentler variants (not tested yet): `file 0x1A754` `b +0x18` -> `b +0x04`
+  (= v27), and `file 0x1A710` timeout 2000 ms -> 0 (= v28).
 
-- 启动链：SPL → SML(BL31) → TOS(Trusty) → uboot → kernel。
-  已逐一验证 SPL / SML / TOS 均无日志输出逻辑，唯一可用输出面在 uboot。
-- USB 校准口：`1782:4d00` “Gadget Serial”（厂商类 0xff，EP5-IN=0x85 / EP6-OUT=0x06，bcdDevice 24.16）。
-  该 USB 仅存在于 uboot 阶段，跳内核即消失——所以采集脚本必须**先启动、后上电**，中途断开属正常。
-- 取日志的三种途径：
-  1. **USB 实时输出**（本仓库，实时、可反复抓）；
-  2. 读 uboot_log 分区（开机后从系统内读历史 slot，见 `tools/parse_uboot_log.py`）；
-  3. UART（需拆机接线；对照样本见 `reference/`）。
+## 2. Images and tools
 
-## 2. 补丁原理（v4 最终版）
-
-对原厂 uboot（`images/uboot.img`，484260B，md5 `a03efc…`）的全部修改：
-
-| 区域 | 修改 | 说明 |
+| image | md5 | status |
 |---|---|---|
-| 0x30 | DHTB 长度字段 → 0x00076024 | 头部字段 |
-| 0xE798 | `puts()` → `B 0x76408` | 打印入口改跳 puts_hook |
-| 0x17B0C | → `MOV W0,#1; RET` | 砍 pctool/NV 分支（直接返回成功） |
-| 0x17FDC | → `MOV W0,#1; RET` | 同上 |
-| 0x1AAF0 | 校准循环体 → `BL 0x763A8` | 进入 stub：SMC USB init + 置 flag |
-| 0x1AAF4 | 校准循环体 → `B 0x1AAE8` | 跳出校准循环、继续正常启动 |
-| 0x1A318 | AON bit3 校准分支 → `B 0x1AAE8` | 跳过另一条校准路径 |
-| 0x763A4~0x76423 | 文件尾追加区（128 B） | flag@0x763A4 / stub@0x763A8 / usb_log_puts@0x763C4 / puts_hook@0x76408 |
+| `images/uboot-v25-log.img` | `57a103f5...` | hook only; boots fine, no data |
+| `images/uboot-v26-forceport.img` | `9a1d5975...` | **verified**: 258 bytes captured |
+| `images/uboot-v27-alloc.img` | `b19f00a8...` | untested |
+| `images/uboot-v28-alloc-fast.img` | `0bfe247b...` | untested |
 
-追加区三个函数：
+- `tools/usb_reader.py` - host reader (libusb via ctypes, no deps); fsyncs
+  every received chunk to disk.
+- `tools/dump_uboot_log.sh` - dump + parse the uboot_log partition (section 5).
+- `patch/make_log_images.py` - rebuild all four images from
+  `images/uboot.img`, with md5 self-check.
 
-- **stub @0x763A8**：`BL 0x1B328`（SMC USB init）→ 置 flag=1 → `BL 0x30EA0`（USB poll）→ RET
-- **usb_log_puts @0x763C4**：建帧 → 内联 strlen → `BL 0x2D1D0`（gserial 写 + kick）→ `BL 0x30EA0`（poll）→ 返回
-- **puts_hook @0x76408**：复刻原 puts 序言 → 调 usb_log_puts → 跳回原 puts（UART 照常输出，双通道）
+## 3. Known issue of v26
 
-v4 与基线全量 diff = **7 个区域**，其余字节逐字节一致（2026-09-13 审查）：
-`0x30`、`0xE798`、`0x17B0C~0x17B13`、`0x17FDC~0x17FE3`、`0x1A318`、`0x1AAF0~0x1AAF7`、`0x763A4~0x76423`。
-（0x1AA6C / 0x1AA80 两处 CBZ 在 v1 被改动过，v3 已恢复原样，故最终版无差异。）
+Taking the "port opened" branch also runs the tool handshake waits
+(`usb read timeout` shows up in the log), which adds about 8 s
+(`lcd start init time` goes 4004 ms -> 12148 ms), and the boot then
+**stalls at the panel read ID step**.  v27 / v28 target exactly this.
 
-v3 → v4 的唯一改动：**补 USB 事件 poll**（两处 `BL 0x30EA0`），修复 in-flight 传输泄漏导致的日志卡死。
-依据：原 gserial 发送函数 sub_1A8BC = `BL 0x2D1D0`（写入 8KB 环形缓冲 + kick）+ `BL 0x2D2F0`（事件循环）；
-`0x30EA0` 是单次非阻塞的 poll（未就绪返回 -22）。v3 漏了 poll → in-flight 计数泄漏 → 日志中途卡死。
+## 4. [0x30] must not be changed (mechanism)
 
-安全依据（为什么砍校准不影响启动）：校准只是教室工具/产测用的 USB 收发；本机 uboot 无校验链
-（SPL 只查镜像大小、TOS 不校验 uboot），且 v1 修改版**曾实机运行成功**。
+vboot derives the tail security header location from it:
 
-## 3. 目录结构
+    sechdr_offset = [0x30] + 0x200 = 0x760F0     (cert at 0x76150)
 
-```
-uboot-usblog/
-├── tools/     采集与解析工具（uboot_usb_log.py 为主）
-├── patch/     补丁脚本（v1 之后的全部生成脚本）
-├── images/    各版本 uboot 镜像归档（原厂 + v1 + 实验 + v3 + v4）
-├── analysis/  IDA 导出的原版反汇编（uboot.asm，Input MD5 = a03efc…）
-└── reference/ 对照样本日志（另一台 SL8541E 设备）
-```
+Changing [0x30] makes vboot read the wrong location -> **reset loop**.  This
+is the "screen lights up, then reboots after about 3.3 s" symptom (the LCD
+init runs before the vboot step, so the screen comes up first).  [0x30] must
+stay `0x75EF0` and the file length must not change.
 
-## 4. 版本链与文件
+## 5. uboot_log partition (only written for *successful* boots)
 
-| 版本 | 镜像 | 大小 | md5 | 生成者 | 说明 |
-|---|---|---|---|---|---|
-| 基线 | `images/uboot.img` | 484260 | `a03efc263613a61680e892261df90954` | — | 原厂（与 `uboot-unlock-bootloader.img` 同一文件） |
-| v1 | `images/uboot-usblog.img` | 484388 | `dbdfbd641bdc453d3d6bc4edb88b6322` | 早期脚本（未归档） | 最早可用版（puts hook + 尾部追加区），曾实机运行 |
-| 实验 | `images/uboot-patched.img` | 484260 | `b7f87c0d67a6540705abe17718d38417` | `patch/patch_usb_log.py` | 早期路线①：砍 sub_17FDC / sub_17B0C / sub_2C98 |
-| 实验 | `images/uboot-usb-log.img` | 484260 | `743269123a3bdd991073d900b7867908` | `patch/patch_usb_log_output.py` | 早期路线②：UART putc 重定向到 0x17FE4 的 usb_log_putc |
-| v3 | `images/uboot-nocal-usblog.img` | 484388 | `513b2ee7254f3fbad926050ab059ee38` | `patch/patch_nocal_usblog.py` | v1 基线 + 砍校准 / 砍 pctool NV + SMC stub |
-| **v4** | `images/uboot-nocal-usblog-v4.img` | 484388 | `62897565b0aaf0c6a4937e6e735e0478` | `patch/patch_v4_poll.py` | **最终版**：+ USB poll 修复（已全量审查 + 已实机刷入） |
+- `/dev/block/mmcblk0p11`, 4 MB = header + N x 256 KB slots; each slot is
+  the complete pre-kernel u-boot console log of one boot.
+- **Verified: a slot is only written when the boot completes successfully.**
+  A boot that stalls or resets at any step (including before the kernel
+  jump) leaves **no record at all**, so this partition cannot be used to
+  debug unbootable / stuck devices.  For those cases the live USB log is the
+  only channel (UART does not work on the DW99: 1.8 V vs 3.3 V levels).
+- Slots from successful boots contain lines like `rst_mode 40/0`,
+  `is_7s_reset`, `USB SERIAL CONFIGED`, `port open timeout`,
+  `battery unconnected shutdown charge`.
+- Dump it from recovery (adb root) with `tools/dump_uboot_log.sh`.
 
-v1 相对基线的差异：`0x30`、`0xE798`（hook）、`0x1AA6C` / `0x1AA80`（CBZ，后被 v3 恢复）、尾部追加区（`0x763A4~0x76423`）。
-v1 → v3 差异：`0x17B0C`、`0x17FDC`（→ MOV;RET）、`0x1A318`、`0x1AAF0~0x1AAF7`、`0x1AA6C` / `0x1AA80`（恢复）、`0x763A8~0x763AB`、`0x763BC~0x763C3`（stub 更新）。
+## 6. Host-side notes and pitfalls
 
-复现（脚本内 SRC/DST 是当时的绝对路径，换机器需先改）：
+- Device: `1782:4d00`, `bcdDevice 24.16` ("Gadget Serial", vendor class
+  0xff, EP5-IN = 0x85, 64-byte bulk).
+- After claiming the interface, send `SET_CONTROL_LINE_STATE` (DTR/RTS).
+- Address conversion: `VA = file + 0x9EFFFE00`; converting back,
+  `file = (VA - 0x9F000000) + 0x200`.  Forgetting the 0x200 is a classic
+  trap (it cost most of a day here).
+- If no data arrives, check the device side for `port open timeout`: that
+  means the gserial channel was never allocated.
 
-```sh
-python3 patch/patch_nocal_usblog.py   # uboot-usblog.img → uboot-nocal-usblog.img（末尾自校验 ALL PASS）
-python3 patch/patch_v4_poll.py        # → uboot-nocal-usblog-v4.img（末尾自校验 ALL PASS）
-```
+## 7. Earlier versions
 
-## 5. 使用（采集日志）
+- v1's claim of "verified, 3.7 KB of logs" cannot be reproduced: without
+  the channel-allocation patch there is no channel, and no host-side reader
+  can receive anything (see `FINDINGS-2026-09-26.md`).
+- Every image that touched `[0x30]` (v4/v5/v7/v12/v13) loops - section 4.
+- Treat all pre-2026-09-26 images as non-functional experiments.
 
-依赖：Linux 主机 + libusb-1.0（`apt install libusb-1.0-0`）+ python3（无需 pip 安装任何东西）。
+## 8. Layout
 
-```sh
-# 1) 主机先启动采集（此时手表不要上电）
-python3 tools/uboot_usb_log.py            # 默认输出 uboot_usb_MMDD_HHMMSS.log（带主机时间戳）
-#    可选：-o 指定文件 | --raw 另存原始字节流 | --no-ts 不加时间戳 | --once 抓一次退出 | -q 安静
-
-# 2) 手表插线上电 → 抓 uboot 全阶段 → 跳内核时 USB 消失（正常），脚本自动等待下一次枚举
-```
-
-（如遇 `libusb_init failed (permission?)`：用 root 运行或配置 udev 规则。）
-
-其他工具：
-
-- `tools/uboot_usb_log_reader.py` —— 旧版采集器（功能等价，留作参考）
-- `tools/parse_uboot_log.py` —— 解析 uboot_log 分区 dump（magic 0xABCD、512B 头、6 slot × 256KB），导出 `slotN_@off.log`
-
-## 6. 实测结论与关键地址
-
-- 单次采集约 **3.7KB（90~92 行）**：是「上电 → 跳内核前 flush」的实际输出量，**不是缓冲上限**。
-  （曾误判为 4KB 上限；实际 DTB reserved-memory `logbuffer@92400000 size=0x50000` = 320KB）
-- RPMB key 未写：`sprd_get_imgversion` 重试 13 次，占日志约 48%，属正常噪音。
-- 日志截止点 = 跳内核 `sub_17524` 的 flush 序列（sub_D1A4 → sub_D1B8 → sub_D434 → MMU → `BLR 0x80080000`），此后无 printf。
-- 部分消息字符串搜不到 ADRP+ADD 引用属正常：日志宏按编译期等级裁剪后调用点消失、字符串残留（死字符串）；少数经指针表访问（搜 8 字节 VA 才找得到）。
-- uboot 内 `sub_1A69C` 可看到 `loglevel=7`；`fdt_fixup_loglevel` 负责给内核 DTB 打补丁。
-
-关键地址（文件偏移）：
-
-| 符号 | 偏移 | 备注 |
-|---|---|---|
-| printf | 0xE7D8 | |
-| puts | 0xE798 | 本次 hook 点 |
-| UART putc | 0x2B2D8 | 输出单个字符 |
-| gserial 发送 | sub_1A8BC | = 0x2D1D0 写环形缓冲 + kick；0x2D2F0 事件循环 |
-| USB poll | 0x30EA0 | 单次非阻塞，未就绪返回 -22 |
-| SMC USB init | 0x1B328 | |
-| 追加区 | 0x763A4~0x76423 | flag / stub / usb_log_puts / puts_hook |
-
-### 附：同批逆向的其他结论（速查）
-
-- 模式判定读 AON 寄存器：0x40388EE4（插线/USB 检测，3s）、0x40388EC8（掩码 0xE0，返回 1/2/4）
-- boot mode 指针表在 0x6A600~0x6B000：normal / recovery / fastboot / charge / alarm / engtest（含复位原因字符串）
-- 符号表：24 B/条 {地址, 0x403, 字符串地址}，分布在 0x6E4A0~0x75820（约 940 条）
-- uboot_log 分区 = 4MB：512B 头（magic 0xABCD / data_off 0x200 / ver / entries）+ 6 slot × 256KB；写入者 sub_D1B8
-- fastboot：代码在 uboot 内（f_fastboot / usb_fastboot_init），DTB `fastbootbuffer@82000000` 12MB；触发条件为 AON 状态组合
-
-## 7. reference/ 对照样本
-
-另一台 SL8541E 设备的日志，用于评估「改 uboot 会不会变砖」：
-
-- `uart_readable.log` —— UART 采集，8 次启动循环卡在 `uboot_vboot_verify_img() return error`（该固件校验链可用）
-- `disavb_tos_8541e.log` —— sfd_tool 刷机日志（含 39 分区表）
-
-结论：不同固件的校验强度不同；DW99 / vp19 本机无可用校验链 → 改 uboot 风险低（且 v1 已实跑验证）。
-
-## 8. 注意事项
-
-- 采集务必「**先起脚本、后上电**」；跳内核断开是正常现象。
-- 刷写 uboot 属风险操作，请自行确认分区与打包格式；本仓库不含刷机工具。
-- `analysis/uboot.asm` 为 IDA 导出的原版线性反汇编（Input MD5 = `a03efc…`），查地址 / 引用可直接 grep。
-- 个人研究存档；固件片段版权归原厂，仅供研究使用。
-
-> 仓库：`https://github.com/Dunoguang/uboot-usblog`
+- `images/` - the images; `patch/` - patch generators; `tools/` - host tools;
+- `analysis/` - disassembly export; `reference/` - reference material.
