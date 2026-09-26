@@ -3,9 +3,10 @@
 # parse one u-boot console log per boot slot.
 # Usage: ./dump_uboot_log.sh [adb-serial] [outdir]
 # uboot_log = /dev/block/mmcblk0p11 (4MB = header + N x 256KB slots).
-# A slot holds the full pre-kernel u-boot console log of one boot. It is
-# written at the very end of the u-boot run, so a boot that dies earlier
-# leaves no slot.
+# A slot holds the full pre-kernel u-boot console log of one boot, but it
+# is only written when the boot completes successfully: a boot that stalls
+# at any step (including before the kernel jump) leaves no record at all,
+# so this partition cannot be used to debug a stuck/unbootable device.
 set -e
 W=${1:-}
 DIR=${2:-.}
