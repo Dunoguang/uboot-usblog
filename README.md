@@ -1,3 +1,13 @@
+> **2026-09-26 update** - see [`FINDINGS-2026-09-26.md`](FINDINGS-2026-09-26.md).
+> Summary: the USB log is now verified working on hardware, but only with an
+> image that forces the 8 KB gserial channel allocation
+> (`images/uboot-v26-forceport.img`).  The v1..v25 images could never
+> produce data, because u-boot skips the channel allocation on the
+> "port open timeout" path (`usb calibrate port open timeout`).
+> `[0x30]` must stay 0x75EF0 (it is the sechdr offset base read by vboot).
+> The `uboot_log` partition gives a complete offline log of every boot that
+> reaches the kernel jump - see `tools/dump_uboot_log.sh`.
+
 # uboot-usblog — DW99 / vp19（展锐 SL8541E）uboot USB 日志抓取
 
 给展锐 uboot 打补丁，把启动日志从 USB 口实时输出，主机用 libusb 抓取。
