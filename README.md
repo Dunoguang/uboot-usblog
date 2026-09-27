@@ -9,6 +9,8 @@ that "does not boot and prints nothing").
 > (recipe below), and the root cause why v1..v25 never received a single byte
 > has been found.  Details in `FINDINGS-2026-09-26.md`.
 >
+> Full notes: [`docs/`](docs/README.md) - internals, campaign log, host side.
+>
 > (This README was rewritten in English because the authoring environment
 > silently corrupts non-ASCII input.  A Chinese version is welcome as a PR.)
 
