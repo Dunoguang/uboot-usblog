@@ -72,3 +72,20 @@ unreachable (1.8 V vs 3.3 V levels):
   normal flags, not error markers.
 - When capturing, filter on bcdDevice 0x24/0x16, otherwise the probe will
   hammer the 2.02 charge-mode device and print endless rc=-1.
+
+## 6. Container gotcha: /dev/bus/usb must be rebuilt after a container restart
+
+Inside the LXC/container the /dev tree is a minimal snapshot.  After a
+container restart there is NO /dev/bus/usb at all; `libusb_open*` then
+returns NULL, and the reader loops forever printing only `listen ...s`.
+Device numbers also change on every re-enumeration of the watch.
+
+Fix: create the node from sysfs and keep it fresh - sysfs
+`/sys/bus/usb/devices/1-1/dev` gives e.g. `189:18`, the node path is
+`/dev/bus/usb/<bus>/<devnum>`:
+
+    mknod /dev/bus/usb/001/019 c 189 18 && chmod 666 /dev/bus/usb/001/019
+
+`tools/mk_usb_node.sh` does this in a loop for 1782:4d00 (run it with
+nohup before the reader).  Symptom to remember: the reader prints only
+`listen ...s` while `lsusb` already shows the device.
