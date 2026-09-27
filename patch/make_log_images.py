@@ -51,9 +51,10 @@ MD5 = {
     'uboot-v26-forceport.img':  '9a1d5975d299363045fbc702aa3e8fcd',
     'uboot-v27-alloc.img':      'b19f00a8f123177207167e256c6a1264',
     'uboot-v28-alloc-fast.img': '0bfe247bf20b9e95911be0cdc1b0b14a',
+    'uboot-v29-portonly.img':   '057265da68e8e9d2833d9a9b2276a4f6',
 }
 
-def make(base, force_port=False, alloc_timeout=False, timeout0=False):
+def make(base, force_port=False, alloc_timeout=False, timeout0=False, trigger=True):
     d = bytearray(open(base, 'rb').read())
     assert len(d) == 484260
     assert struct.unpack_from('<I', d, 0x30)[0] == 0x75EF0
@@ -79,7 +80,8 @@ def make(base, force_port=False, alloc_timeout=False, timeout0=False):
     for i, w in enumerate(log): struct.pack_into('<I', d, LOG + i * 4, w)
     for i, w in enumerate(hook):struct.pack_into('<I', d, HOOK + i * 4, w)
     struct.pack_into('<I', d, 0xE798, b_(va(0xE798), va(HOOK)))
-    struct.pack_into('<I', d, TRIG, bl_(va(TRIG), va(S1)))
+    if trigger:
+        struct.pack_into('<I', d, TRIG, bl_(va(TRIG), va(S1)))
     if force_port:
         assert struct.unpack_from('<I', d, 0x1A720)[0] == 0x350001C0
         struct.pack_into('<I', d, 0x1A720, 0x1400000E)
@@ -99,11 +101,12 @@ def main():
         ('uboot-v26-forceport.img',  dict(force_port=True)),
         ('uboot-v27-alloc.img',      dict(alloc_timeout=True)),
         ('uboot-v28-alloc-fast.img', dict(alloc_timeout=True, timeout0=True)),
+        ('uboot-v29-portonly.img',   dict(force_port=True, trigger=False)),
     ]
     for name, kw in plans:
         data = make(base, **kw)
         md5 = hashlib.md5(data).hexdigest()
-        ok = 'OK' if md5 == MD5[name] else 'MD5 MISMATCH!'
+        ok = ('OK' if md5 == MD5[name] else 'MD5 MISMATCH!') if name in MD5 else '(new)'
         p = os.path.join(out, name)
         open(p, 'wb').write(data)
         print('%-26s %s  %s' % (name, md5, ok))
