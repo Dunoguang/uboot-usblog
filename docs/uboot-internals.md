@@ -100,5 +100,5 @@ The image is rebuilt from the baseline with `assert`s on every original word
 and an md5 self-check (`images/uboot-0.0.1.img`, md5 `9a1d5975...`).
 
 Earlier variants (v25 hook-only, v27 timeout-path allocation, v28 port-open
-wait 0 ms, v29 allocation without logging) were discarded on 2026-09-28; the
-analysis of why they did not help is in `v28-review.md`.
+wait 0 ms, v29 allocation without logging) were discarded on 2026-09-28; what
+they changed is recorded in `campaign-log.md`.

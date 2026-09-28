@@ -37,7 +37,7 @@ byte.
 - The boot stops right after `sprdfb: mipi_dispc_init_config not support TE`:
   the co5300 panel read ID never completes and the screen stays dark.  The stall
   is localised between file `0x3314C` (that print) and file `0x3445C` (the
-  panel read-ID print); analysis in [`docs/v28-review.md`](docs/v28-review.md).
+  panel read-ID print).
 - The log path is blocking: `reply_to_pctool` (file `0x1A8BC`) ends in an
   unbounded `while ([0x9F1CC118] == 0) usb_gadget_handle_interrupts();`
   (file `0x2D114`), so a host that stops reading can freeze u-boot mid-boot.

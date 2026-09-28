@@ -33,7 +33,8 @@ the v26 recipe unchanged, so it reproduces the verified image byte for byte.
 Known limitation of 0.0.1 (why it is a 0.0.x): the boot stops right after
 `sprdfb: mipi_dispc_init_config not support TE`, and the log path can block
 u-boot (reply_to_pctool ends in an unbounded `while (!flag)
-usb_gadget_handle_interrupts();`).  Analysis: docs/v28-review.md.
+usb_gadget_handle_interrupts();`).  See the "Known issues of 0.0.1" section of
+../README.md and ../CHANGELOG.md.
 
 Addresses are FILE offsets.  VA = file + 0x9EFFFE00, so when converting a VA
 back to a file offset remember: file = (VA - 0x9F000000) + 0x200.

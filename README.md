@@ -12,9 +12,8 @@ that "does not boot and prints nothing").
 >
 > On 2026-09-28 every other experiment (v1..v25, v27..v29) was discarded and the
 > verified v26 was promoted to be the baseline, version 0.0.1.  The record of how
-> it was found is kept in [`docs/campaign-log.md`](docs/campaign-log.md) and
-> [`docs/v28-review.md`](docs/v28-review.md) (why 0.0.1 still stops at the panel
-> read ID, and why its log path can block).
+> it was found is kept in [`docs/campaign-log.md`](docs/campaign-log.md); the
+> defects that are still open are listed in section 3 below.
 >
 > Full notes: [`docs/`](docs/README.md) - internals, campaign log, host side.
 >
@@ -59,7 +58,7 @@ that "does not boot and prints nothing").
 - The boot stops right after `sprdfb: mipi_dispc_init_config not support TE`
   (the co5300 panel read ID never completes, so the screen stays dark).  The
   stall is localised between that print (file `0x3314C`) and the panel read-ID
-  print (file `0x3445C`); see `docs/v28-review.md` section 3.
+  print (file `0x3445C`).
 - The log path is blocking: `reply_to_pctool` (file `0x1A8BC`) ends in an
   unbounded `while ([0x9F1CC118] == 0) usb_gadget_handle_interrupts();`
   (file `0x2D114`), so a host that stops reading can freeze u-boot.
@@ -116,8 +115,8 @@ stay `0x75EF0` and the file length must not change (484260).
   channel-allocation patch there is no channel, and no host-side reader can
   receive anything (see `FINDINGS-2026-09-26.md`).
 - Every image that touched `[0x30]` (v4/v5/v7/v12/v13) reset-looped - section 4.
-- History, traps and the analysis of the remaining defects:
-  `docs/campaign-log.md`, `docs/v28-review.md`, `FINDINGS-2026-09-26.md`.
+- History and traps: `docs/campaign-log.md`, `docs/uboot-internals.md`,
+  `FINDINGS-2026-09-26.md`.
 
 ## 8. Layout
 
