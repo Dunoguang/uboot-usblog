@@ -7,6 +7,21 @@ Versioning was restarted on 2026-09-28.  Everything that had been tried before
 real hardware - v26 - was promoted to be the baseline release, 0.0.1.  The
 history of how it was found is in [`docs/campaign-log.md`](docs/campaign-log.md).
 
+## [Unreleased]
+
+### Documentation
+- Diagnosis of the 0.0.1 stall corrected.  An IDA/Hex-Rays review
+  ([`docs/te-stall-analysis.md`](docs/te-stall-analysis.md)) shows the boot is
+  parked in the console send path the patch introduces
+  (`reply_to_pctool` -> unbounded wait for the IN-endpoint completion flag),
+  not in the co5300 panel read ID - that path retries at most 4 times and every
+  DSI wait is bounded, and the unpatched baseline boots to the system on the
+  same hardware.  The last line the host received is simply the last write that
+  completed; the next one (the read-ID line, ~165 ms later) blocks.
+- Section 5 of that document lists the fix direction for 0.0.2 (bounded /
+  best-effort log pump, or queue-only logging) and section 6 the experiments
+  that would confirm it on hardware.
+
 ## [0.0.1] - 2026-09-28
 
 The first kept version: the former `uboot-v26-forceport.img`, unchanged byte for

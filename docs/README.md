@@ -5,6 +5,7 @@
 | [uboot-internals.md](uboot-internals.md) | image layout, [0x30]/vboot, USB serial console flow, dead-code area, the gate-byte defect, VA<->file addressing |
 | [campaign-log.md](campaign-log.md) | v1..v29 history: every change, every result, and the traps |
 | [host-side.md](host-side.md) | USB descriptors, libusb reading, uboot_log partition, reference logs (UART + sfd_tool), sysdump lead |
+| [te-stall-analysis.md](te-stall-analysis.md) | IDA review of 0.0.1: where the boot stops after the TE line, why it is the blocking console send and not the panel, patch review, fix direction, experiments |
 
 Release notes: [`../CHANGELOG.md`](../CHANGELOG.md).
 

@@ -68,16 +68,23 @@ that "does not boot and prints nothing").
 ## 3. Known issues of 0.0.1
 
 - The boot stops right after `sprdfb: mipi_dispc_init_config not support TE`
-  (the co5300 panel read ID never completes, so the screen stays dark).  The
-  stall is localised between that print (file `0x3314C`, the printf call; the
-  string is loaded at `0x33140`) and the panel read-ID printf call (file
-  `0x3445C`; the format string
+  and the screen stays dark.  The stall is between that print (file `0x3314C`,
+  the printf call; the string is loaded at `0x33140`) and the panel read-ID
+  printf call (file `0x3445C`; the format string
   `co5300_readid read id value is 0x%x,...` is loaded at `0x343BC`).
+  The cause is **not** the panel: the read-ID path retries at most 4 times and
+  every DSI wait is bounded, while the console send path this patch adds has no
+  timeout at all - the next console write after the TE line parks u-boot in the
+  USB wait.  Full IDA review:
+  [`docs/te-stall-analysis.md`](docs/te-stall-analysis.md).
 - The log path is blocking: `reply_to_pctool` (file `0x1A8BC`) calls the event
   pump at file `0x2D2F0`, whose wait
   `while ([0x9F1CC118] == 0) usb_gadget_handle_interrupts();`
-  (file `0x2D314`, VA `0x9F02D114`) has no timeout, so a host that stops
-  reading can freeze u-boot.
+  (file `0x2D314`, VA `0x9F02D114`) has no timeout; the flag it waits for is set
+  only by the IN-endpoint completion callback (`gs_write_complete`, file
+  `0x2C464`), so u-boot blocks whenever the host stops draining EP 0x85.  This
+  is the defect behind the stall above - see `docs/te-stall-analysis.md`
+  sections 3 and 5.
 - The gate byte is addressed 0x200 too high by the injected code: the gate it
   really uses is file `0x1BE34`, not `0x1BC34`.  That byte is the first byte of
   `add x0,x0,#0x7b7` in the *next* dead function (the fastboot "unlock
