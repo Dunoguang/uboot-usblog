@@ -1,5 +1,10 @@
 # Campaign log: how the USB log was made to work (and what cost time)
 
+> **Status 2026-09-28**: this is the historical record.  v26 was promoted to
+> version **0.0.1** (`images/uboot-0.0.1.img`, md5 `9a1d5975d299363045fbc702aa3e8fcd`)
+> and all other experiments (v1..v25, v27..v29) were discarded - see
+> `../CHANGELOG.md`.  Image files named below no longer exist.
+
 Device: DW99 / vp19 (Spreadtrum SL8541E), u-boot 2015.07.
 Baseline image: the "unlock baseline" `images/uboot.img`
 (md5 `a03efc263613a61680e892261df90954`, 484260 bytes) - the only known-good
@@ -59,8 +64,8 @@ image, boots normally, no integrity check.
   It then stalls at the panel read-ID step.
 - Side effect: the forced branch also runs the tool handshake waits, making
   boot ~8 s slower (`lcd start init time` 4004 ms -> 12148 ms).  v27/v28
-  (in `images/`, built by `patch/make_log_images.py`) target exactly this.
-  NOT FLASHED YET.
+  (built by `patch/make_log_images.py`) targeted exactly this, but were never
+  tested and have been discarded (2026-09-28).  v26 is the kept version, 0.0.1.
 
 ## Traps worth remembering
 

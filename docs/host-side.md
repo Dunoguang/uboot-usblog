@@ -22,7 +22,7 @@ not u-boot (do not sleep on it - verify 24.16 before capturing).
 - rc=-7 means the endpoint is alive but idle (no data yet);
   rc=-1 / submit -2 for a few ms around a disconnect is normal.
 - If reads time out forever, look at the device side for
-  `port open timeout`: the channel was never allocated (use v26 or newer).
+  `port open timeout`: the channel was never allocated (use version 0.0.1, `images/uboot-0.0.1.img`).
 
 ## 3. uboot_log partition (offline, with a big caveat)
 

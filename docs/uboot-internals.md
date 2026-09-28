@@ -88,13 +88,17 @@ original code continues at 0xE79C with the stack already set up.
 Proof that 0xE798 is the print path (v22): replacing it with `b .` hangs
 the device before the logo appears.
 
-## 5. Patch recipes (produced by patch/make_log_images.py)
+## 5. Patch recipe of version 0.0.1 (produced by patch/make_log_images.py)
 
-    v25  hook + log fn                                     (boots, 0 bytes)
-    v26  v25 + 0x1A720: 350001C0 -> 1400000E               (force alloc; VERIFIED)
-    v27  v25 + 0x1A754: 14000006 -> 14000001               (take alloc branch
-                                                            without the wait)
-    v28  v27 + 0x1A710: D280FA01 -> D2800001               (2000 ms -> 0 ms)
+    0xE798: A9BF7BFD -> 14003541   puts entry -> hook (file 0x1BC9C)
+    0x1A768: 97FFD01C -> 94000534  "USB SERIAL PORT OPENED" printf -> trigger
+                                   stub (file 0x1BC38)
+    0x1A720: 350001C0 -> 1400000E  cbnz w0,+0x38 -> b +0x38 (force the 8 KB
+                                   gserial channel allocation)
 
-Each image is rebuilt from the baseline with `assert`s on every original
-word and an md5 self-check; see the script header.
+The image is rebuilt from the baseline with `assert`s on every original word
+and an md5 self-check (`images/uboot-0.0.1.img`, md5 `9a1d5975...`).
+
+Earlier variants (v25 hook-only, v27 timeout-path allocation, v28 port-open
+wait 0 ms, v29 allocation without logging) were discarded on 2026-09-28; the
+analysis of why they did not help is in `v28-review.md`.

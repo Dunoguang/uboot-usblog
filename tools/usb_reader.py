@@ -11,7 +11,7 @@ received chunk to the output file.
 
 IMPORTANT (measured 2026-09-26):
   The device side MUST use an image that forces the 8KB gserial
-  channel allocation (images/uboot-v26-forceport.img or later).
+  channel allocation (images/uboot-0.0.1.img).
   Otherwise u-boot takes the "usb calibrate port open timeout" path,
   the channel buffer is never allocated, and no host-side reader can
   get any byte (this is why v1..v25 never produced data).
