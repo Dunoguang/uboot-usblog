@@ -42,7 +42,11 @@ that "does not boot and prints nothing").
   gserial channel allocation** (the `bl 0x9F02CDFC` at file `0x1A758` sits on
   the "port opened" branch).
 - Patching `file 0x1A720` from `cbnz w0,+0x38` to `b +0x38` makes u-boot
-  allocate the channel, which is what lets any byte reach the host.
+  allocate the channel, which is what lets any byte reach the host.  It is
+  **optional since 2026-09-28**: the host must assert DTR only
+  (`SET_CONTROL_LINE_STATE` with `wValue = 1`), then u-boot's own port-open wait
+  succeeds and allocates the channel without any patch here - see
+  [`docs/te-stall-analysis.md`](docs/te-stall-analysis.md) section 4.
 
 ## 2. Images and tools
 
@@ -84,7 +88,7 @@ that "does not boot and prints nothing").
   only by the IN-endpoint completion callback (`gs_write_complete`, file
   `0x2C464`), so u-boot blocks whenever the host stops draining EP 0x85.  This
   is the defect behind the stall above - see `docs/te-stall-analysis.md`
-  sections 3 and 5.
+  sections 3 and 6.
 - The gate byte is addressed 0x200 too high by the injected code: the gate it
   really uses is file `0x1BE34`, not `0x1BC34`.  That byte is the first byte of
   `add x0,x0,#0x7b7` in the *next* dead function (the fastboot "unlock
@@ -126,7 +130,12 @@ stay `0x75EF0` and the file length must not change (484260).
 
 - Device: `1782:4d00`, `bcdDevice 24.16` ("Gadget Serial", vendor class
   0xff, EP5-IN = 0x85, 64-byte bulk).
-- After claiming the interface, send `SET_CONTROL_LINE_STATE` (DTR/RTS).
+- After claiming the interface, send `SET_CONTROL_LINE_STATE` with **`wValue = 1`**
+  (DTR asserted, RTS clear).  The vendor `gser_setup` handler treats exactly `1`
+  as "port open" and **every other value - including `3` (DTR|RTS) - as "port
+  closed"**, so `wValue = 3` actively prevents u-boot from allocating the
+  channel (`docs/te-stall-analysis.md` section 4).  `tools/usb_reader.py` sends
+  `1` since 2026-09-28.
 - Address conversion: `VA = file + 0x9EFFFE00`; converting back,
   `file = (VA - 0x9F000000) + 0x200`.  Forgetting the 0x200 is a classic
   trap (it cost most of a day here).

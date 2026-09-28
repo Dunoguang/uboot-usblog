@@ -5,7 +5,8 @@ Usage:  python3 usb_reader.py [seconds] [out.bin]
 Default: 3600 seconds, out = ./usblog.bin
 
 Only accepts 1782:4d00 with bcdDevice==0x2416 (u-boot "Gadget Serial").
-After claiming the interface it sends SET_CONTROL_LINE_STATE(DTR/RTS)
+After claiming the interface it sends SET_CONTROL_LINE_STATE with wValue=1
+(DTR only - see the note at the call site: the vendor handler wants exactly 1)
 and SET_LINE_CODING, then polls bulk EP5-IN (0x85) and fsyncs every
 received chunk to the output file.
 
@@ -15,6 +16,12 @@ IMPORTANT (measured 2026-09-26):
   Otherwise u-boot takes the "usb calibrate port open timeout" path,
   the channel buffer is never allocated, and no host-side reader can
   get any byte (this is why v1..v25 never produced data).
+
+  Note (2026-09-28, IDA review): that was only true while this reader sent
+  wValue=3, which the vendor handler reads as "port closed".  With wValue=1
+  the stock wait can succeed and unmodified u-boot allocates the channel
+  itself.  What still blocks a boot is the console send path, not the panel:
+  see docs/te-stall-analysis.md sections 3-4.
 """
 import ctypes, ctypes.util, time, sys, os
 
@@ -94,7 +101,13 @@ def main():
             L.libusb_set_auto_detach_kernel_driver(dev, 1)
             print('[%.2f] claim=%d' %
                   (now, L.libusb_claim_interface(dev, 0)))
-            r1 = L.libusb_control_transfer(dev, 0x21, 0x22, 3, 0,
+            # SET_CONTROL_LINE_STATE must carry wValue == 1 (DTR asserted, RTS
+            # clear): u-boot's gser_setup handler treats exactly 1 as "port
+            # open" and *any* other value, including 3 (DTR|RTS), as "port
+            # closed" (see docs/te-stall-analysis.md section 4).  Sending 3
+            # here is why the port-open wait timed out and the image had to
+            # force the channel allocation.
+            r1 = L.libusb_control_transfer(dev, 0x21, 0x22, 1, 0,
                                            None, 0, 1000)
             d7 = (ctypes.c_ubyte * 7)(0x00, 0xc2, 0x01, 0, 0, 0, 8)
             r2 = L.libusb_control_transfer(dev, 0x21, 0x20, 0, 0,

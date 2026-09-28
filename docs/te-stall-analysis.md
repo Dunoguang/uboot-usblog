@@ -131,23 +131,94 @@ of the send error global `0x9F1CC0D0`.  Consequences:
   queues nothing and then still waits for a completion that can never come -
   the same permanent hang, without any host involvement at all.
 - The `+8 s` handshake delay that the forced "port opened" branch adds
-  (section 4) is not the cause, but it changes *when* the console becomes
+  (section 5) is not the cause, but it changes *when* the console becomes
   host-dependent.
 
 This is why the documented "the co5300 read ID never completes" is not
 supported: the read-ID code prints and retries; the send of its line is what
 stops.
 
-## 4. Patch review: each of the four 0.0.1 changes
+## 4. Behaviour: the exact conditions that gate the boot
+
+The stock USB-serial bring-up is `sub_9F01A49C`, and it contains **two timed
+waits** before the patch site:
+
+```c
+MEMORY[0x9F1BE008] = 3000;                          // timeout for wait #1
+start = get_timer();
+while (1) {                                         // wait #1: USB configured
+    if (sub_9F02D1B4()) break;                      // [0x9F1CC11C] != 0
+    if (elapsed() > 3000) { printf("usb calibrate configuration timeout,..."); return 0; }
+}
+printf("USB SERIAL CONFIGED\n");
+MEMORY[0x9F1BE008] = 2000;                          // timeout for wait #2
+start = get_timer();
+while (1) {                                         // wait #2: port opened
+    if (sub_9F02D1EC()) break;                      // [0x9F1CC190] != 0
+    if (elapsed() > 2000) { printf("usb calibrate port open timeout,..."); return 0; }
+}
+sub_9F02CDFC();                                     // <- 0x1A720 forces this line
+printf("USB SERIAL PORT OPENED\n");                 // <- 0x1A768: trigger sets the gate
+return 1;
+```
+
+Both flags are host-driven, and the writers are known:
+
+- `[0x9F1CC11C]` (wait #1) is set by the gserial **bind/config callback**
+  `sub_9F02D6D8` -> `sub_9F02D4D4`: it needs the host to enumerate the device and
+  send `SET_CONFIGURATION`.  A plain PC does this; a charger does not.
+- `[0x9F1CC190]` (wait #2) is set only by the class-request handler
+  `sub_9F02B668` (`gser_setup`):
+
+      if ((bmRequestType & 0x60) != 0x20 || bRequest != 0x22) return -EOPNOTSUPP;
+      if (wValue_low == 1) [0x9F1CC190] = 1;   // DTR asserted, RTS clear -> "port open"
+      else                 [0x9F1CC190] = 0;   // anything else -> "port closed"
+
+  i.e. the port opens on `SET_CONTROL_LINE_STATE (0x22)` with **wValue exactly
+  1**, and any other value - including `wValue = 3` (DTR|RTS) - *closes* it.
+
+`tools/usb_reader.py` sends `wValue = 3`, so it closes the port on every attach;
+that is why wait #2 always times out and why the `0x1A720` force was needed.
+
+### 4.1 Behaviour table (0.0.1 image)
+
+| host situation | what the device does | why |
+|---|---|---|
+| no host at all (battery, dumb charger, PC powered off) | wait #1 times out after 3 s, `sub_9F01A49C` returns early, the forced branch is **never reached**, the gate never opens: **the watch boots exactly like the stock image** (screen comes up, no log).  It does *not* hang | wait #1 needs `SET_CONFIGURATION` |
+| PC attached, nothing reading EP 0x85 (no reader, or reader not started) | wait #1 passes, wait #2 times out, the patch forces the allocation, `USB SERIAL PORT OPENED` opens the gate - and then the **first log line blocks in the pump**, because the completion needs the host to read EP 0x85.  Result: **freeze before the LCD init**: dark screen, device dead, no further output.  Starting the reader later unblocks it (the already-queued IN request completes) | pump flag = IN completion |
+| PC attached, reader running with today's `wValue = 3` | boot proceeds line by line at the reader's pace; **the moment the reader stops, the boot freezes at the next line** - the observed stop after the TE line | pump has no timeout |
+| PC attached, reader asserting DTR only (`wValue = 1`) | wait #2 succeeds in milliseconds, the *stock* code allocates the channel itself and prints `USB SERIAL PORT OPENED` - the `0x1A720` patch becomes a no-op.  The blocking pump remains the only defect | `gser_setup` |
+| holding/pressing any key or button | no effect on this path: there is **no live key wait**.  `Press volume up/down ...` belongs to the dead fastboot unlock handler, and u-boot's `Hit any key to stop autoboot` is a bounded countdown that runs before the gate opens | xrefs of the key strings |
+
+Direction matters: **host -> device transfers never gate the boot** (every input
+wait has a 3000/2000 ms timeout and prints a timeout line).  Only
+**device -> host** can block, because only that direction lacks a timeout.
+
+### 4.2 Host-side fix that comes out of this
+
+The `wValue == 1` rule above means an unmodified u-boot (or a hook-only image)
+*can* bring the console channel up by itself - v1..v25 never tried it, because
+`usb_reader.py` always sent `wValue = 3` and therefore closed the port it was
+trying to open.  Consequences for 0.0.2:
+
+- send `SET_CONTROL_LINE_STATE` with `wValue = 1` (DTR only) in the reader;
+- the `cbnz -> b` force at `0x1A720` is then unnecessary (kept only if the
+  handshake cannot be relied on);
+- the +8 s of handshake timeouts shrink (wait #2 becomes immediate), though the
+  pctool input waits that follow `USB SERIAL PORT OPENED` still time out;
+- the blocking pump must still be fixed (section 6) - the handshake does not
+  touch that.
+
+## 5. Patch review: each of the four 0.0.1 changes
 
 | # | change | verdict |
 |---|---|---|
 | 1 | `0xE798` puts entry -> hook at `0x1BC9C` | sound; recreates the prologue and returns to `0xE79C`, and v22's `b .` control test proves it is the print path |
 | 2 | `0x1A768` -> trigger stub `0x1BC38` (sets the gate, tail-calls the original printf) | sound; sets the gate on the live "USB SERIAL PORT OPENED" site.  Note a second, unreferenced copy of that print exists at file `0x1C60C` (dead function `0x1C598`) - a boot that took it would never set the gate |
-| 3 | `0x1A720` `cbnz` -> `b` (force the ring allocation) | works (it is what enables the endpoint), but it also takes the tool-handshake waits, stretching LCD init from 4004 ms to 12148 ms, and it is the step that makes the console host-dependent |
+| 3 | `0x1A720` `cbnz` -> `b` (force the ring allocation) | works - but it is now known to be **unnecessary**: with `SET_CONTROL_LINE_STATE wValue = 1` wait #2 succeeds and the stock code allocates the channel by itself (section 4).  Keeping it costs the 2 s wait #2 timeout and keeps the console bring-up host-dependent |
 | 4 | injected log fn calling `reply_to_pctool` | **the defect**: a blocking send on a boot path.  The gate byte it uses is at file `0x1BE34` (0x200 off, inside the *next* dead function, on an `add` instruction) - latent, not the cause, but fix it before moving the block |
 
-## 5. Fix direction for 0.0.2 (make the log best-effort)
+## 6. Fix direction for 0.0.2 (make the log best-effort)
 
 The log must never be able to stop the boot.  Options, cheapest first:
 
@@ -169,19 +240,26 @@ The log must never be able to stop the boot.  Options, cheapest first:
 4. Fix the gate constant (`0xC34` -> `0xA34`) while the block is being touched,
    and move the gate into the injected block itself so a future move is safe.
 
-## 6. Experiments that would settle the remaining question
+## 7. Experiments that would settle the remaining question
 
 Static analysis cannot decide *why* the completion stopped arriving at that
 particular line (host-side stall vs. device-side USB state); these images would:
 
+- **E0 (new, cheapest of all)**: keep the *stock* `images/uboot.img`, run the
+  reader with `SET_CONTROL_LINE_STATE wValue = 1`, and watch for
+  `usb calibrate port open timeout` in the uboot_log partition afterwards: if
+  the line is *absent*, wait #2 succeeded and the channel was allocated without
+  any patch - which is the missing handshake behind v1..v25's silence.
 - **E1 (decisive)**: 0.0.1 + bounded pump (fix 1).  If the boot then passes the
   TE line, reaches the co5300 read-ID line and the screen comes up, the stall is
   confirmed to be the blocking log path.
 - **E2**: baseline + forced ring allocation only, no hook/trigger (the never
   tested "port-only" idea).  Proves change 3 alone does not disturb the boot.
-- **E3**: 0.0.1 with the host reader *not* running at all.  Expect a freeze at
-  the first logged line (`USB SERIAL PORT OPENED`); this demonstrates the
-  coupling directly.
+- **E3**: 0.0.1 with the host reader *not* running at all, but the watch plugged
+  into a PC.  Expect the freeze *before* the LCD init (section 4.1, row 2);
+  unplugging will not help, starting the reader will.
+- **E3b**: 0.0.1 on battery only - expect a normal boot with no log at all
+  (wait #1 times out and the forced branch is never reached).
 - **E4**: 0.0.1 with the reader running and host-side `dmesg -w` / `lsusb -t`
   watched: distinguishes a host USB reset/suspend at the stall point from a
   device-side stop.
@@ -189,7 +267,7 @@ particular line (host-side stall vs. device-side USB state); these images would:
   whether the endpoint keeps NAKing (device alive, nothing to send) or stops
   answering altogether.
 
-## 7. Reproducing this analysis
+## 8. Reproducing this analysis
 
     mkdir -p /root/idawork && cd /root/idawork
     python3 tools/mk_ida_elf.py images/uboot.img uboot-base.elf     # throwaway wrapper

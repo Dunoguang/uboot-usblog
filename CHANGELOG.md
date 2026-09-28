@@ -18,9 +18,18 @@ history of how it was found is in [`docs/campaign-log.md`](docs/campaign-log.md)
   DSI wait is bounded, and the unpatched baseline boots to the system on the
   same hardware.  The last line the host received is simply the last write that
   completed; the next one (the read-ID line, ~165 ms later) blocks.
-- Section 5 of that document lists the fix direction for 0.0.2 (bounded /
-  best-effort log pump, or queue-only logging) and section 6 the experiments
-  that would confirm it on hardware.
+- Section 4 of that document specifies the exact behaviour: with **no host** the
+  forced branch is never reached and the watch boots like the stock image
+  (no log); plugged into a PC **without a reader on EP 0x85** the boot freezes
+  *before* the LCD init; no key press is involved anywhere.
+- **Host handshake bug found**: `gser_setup` (file `0x2B668`) opens the port
+  only for `SET_CONTROL_LINE_STATE` with `wValue == 1`; any other value -
+  including `3` (DTR|RTS), which `tools/usb_reader.py` used to send - closes it.
+  The reader now sends `1`, so unmodified u-boot can bring the channel up by
+  itself and the `0x1A720` force is optional.
+- Section 6 of that document lists the fix direction for 0.0.2 (bounded /
+  best-effort log pump, or queue-only logging) and section 7 the experiments
+  that would confirm it on hardware (E0 tests the handshake on the stock image).
 
 ## [0.0.1] - 2026-09-28
 
