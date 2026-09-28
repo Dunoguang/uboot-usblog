@@ -13,16 +13,25 @@ the v26 recipe unchanged, so it reproduces the verified image byte for byte.
 0.0.1 contains two parts, both required for the live USB log:
 
   a) console hook - file 0xE798 (puts entry) -> hook in the never-called
-     fastboot unlock handler body (file 0x1BC34..0x1BEDC):
-       0x1BC34  gate byte (0 in the image; the trigger sets it, the log fn
-                clears it while sending so a re-entrant printf cannot recurse)
+     fastboot unlock handler body (the injected block spans file
+     0x1BC34..0x1BCB7):
+       0x1BC34  zeroed by the patch; NOT the byte the injected code gates on
        0x1BC38  trigger stub: set gate=1, tail-call the original printf
-       0x1BC4C  log fn: gate==0 -> return; clear gate; strlen;
+       0x1BC4C  log fn: gate==0 -> return; clear gate; inline strlen;
                 bl reply_to_pctool (file 0x1A8BC); set gate; ret
        0x1BC9C  hook: recreate the puts prologue, bl log fn, jump back to
                 0x9F00E59C
      The gate is set at file 0x1A768, the printf call site of
      "USB SERIAL PORT OPENED".
+
+     KNOWN DEFECT, kept so that 0.0.1 stays reproducible byte for byte: the
+     adrp/add pair that materialises the gate uses #0xC34, so the byte the code
+     really reads and writes is file 0x1BE34, not 0x1BC34.  That byte is the low
+     byte of an `add x0,x0,#0x7b7` in the NEXT dead function (the fastboot
+     "unlock bootloader" confirm handler, file 0x1BEDC..0x1BF87).  It works
+     only because the trigger stub and the log fn repeat the same mistake, and
+     because both functions are unreachable; change the constant to 0xA34
+     before moving or extending the block (docs/uboot-internals.md section 4).
 
   b) force the 8 KB gserial channel allocation - file 0x1A720
      (`cbnz w0,+0x38` -> `b +0x38`).  Without a tool handshake u-boot prints
@@ -32,9 +41,10 @@ the v26 recipe unchanged, so it reproduces the verified image byte for byte.
 
 Known limitation of 0.0.1 (why it is a 0.0.x): the boot stops right after
 `sprdfb: mipi_dispc_init_config not support TE`, and the log path can block
-u-boot (reply_to_pctool ends in an unbounded `while (!flag)
-usb_gadget_handle_interrupts();`).  See the "Known issues of 0.0.1" section of
-../README.md and ../CHANGELOG.md.
+u-boot - reply_to_pctool calls the event pump at file 0x2D2F0, whose wait
+(`while ([0x9F1CC118] == 0) usb_gadget_handle_interrupts();`, file 0x2D314)
+has no timeout.  See the "Known issues of 0.0.1" section of ../README.md and
+../CHANGELOG.md.
 
 Addresses are FILE offsets.  VA = file + 0x9EFFFE00, so when converting a VA
 back to a file offset remember: file = (VA - 0x9F000000) + 0x200.

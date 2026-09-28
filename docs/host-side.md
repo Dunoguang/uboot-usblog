@@ -28,6 +28,9 @@ not u-boot (do not sleep on it - verify 24.16 before capturing).
 
 - `/dev/block/mmcblk0p11`, 4 MB = header (magic 0xABCD, data offset 0x200,
   entries N) + N x 256 KB slots; one slot per boot.
+- Cross-checked against the device partition table captured in
+  `reference/disavb_tos_8541e.log`: index 11 is `uboot_log`, 4 MB, and the
+  whole table has 38 entries (uboot = 9, uboot_bak = 10).
 - **A slot is only written when the boot completes successfully.**  A boot
   that stalls or resets at any step (including before the kernel jump)
   leaves NO record.  Verified on hardware - so this partition MUST NOT be
@@ -39,11 +42,11 @@ not u-boot (do not sleep on it - verify 24.16 before capturing).
 - Dump from recovery (adb root) with `tools/dump_uboot_log.sh`; parse with
   `tools/parse_uboot_log.py`.
 
-## 4. UART reference (captured on a sibling watch)
+## 4. Reference material (UART log, sfd_tool session)
 
-A second watch (same u-boot family, panel icna3311, kernel 4.4.83) provides
-a UART comparison - useful because the DW99 UART is electrically
-unreachable (1.8 V vs 3.3 V levels):
+`reference/uart_readable.log` - a UART boot log captured on a second watch
+(same u-boot family, panel icna3311, kernel 4.4.83).  It is useful because the
+DW99 UART is electrically unreachable (1.8 V vs 3.3 V levels):
 
 - Same calibrate line: `usb calibrate port open timeout4080,2079,2000`.
 - Same +0x200 rule: that image has [0x30] = 0x75C50 and prints
@@ -63,6 +66,23 @@ unreachable (1.8 V vs 3.3 V levels):
   `pm_sys`, `miscdata`).  **UNVERIFIED** - check whether it also only
   records successful boots (unlikely, it is a crash path) before relying
   on it.
+
+`reference/disavb_tos_8541e.log` - a download-mode (BROM) session with the
+vendor `sfd_tool` (v2.6.18).  It is the record of how the unlocked baseline was
+produced, and it is also where the partition map in these docs comes from:
+
+- FDL1 is sent to `0x5000`, FDL2 to `0x9efffe00` - the second address is exactly
+  the image base the VA/file rules in `uboot-internals.md` use;
+- the GPT is read and all 38 partitions are listed (`uboot` 1 MB at index 9,
+  `uboot_bak` at 10, `uboot_log` 4 MB at 11, `system` 3800 MB, ...);
+- `trustos` + `sml` are dumped, `tos-noavb.bin` is built ("Disable AVB by
+  patching trustos") and written to `trustos_bak` and `w_force`, with the
+  original kept as `trustos-orig.bin`; the log notes "Device is not using VAB";
+- raw data mode is supported but disabled by default for stability.
+
+So `images/uboot.img` is a u-boot image for a device whose AVB has been
+disabled this way - a patched u-boot on a device that still enforces AVB is a
+different situation.
 
 ## 5. Environment pitfalls (cost real time)
 

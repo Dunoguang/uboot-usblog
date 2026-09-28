@@ -38,12 +38,15 @@ byte.
   the co5300 panel read ID never completes and the screen stays dark.  The stall
   is localised between file `0x3314C` (that print) and file `0x3445C` (the
   panel read-ID print).
-- The log path is blocking: `reply_to_pctool` (file `0x1A8BC`) ends in an
-  unbounded `while ([0x9F1CC118] == 0) usb_gadget_handle_interrupts();`
-  (file `0x2D114`), so a host that stops reading can freeze u-boot mid-boot.
-- The injected code addresses the gate byte 0x200 too high (it really lives at
-  file `0x1BE34`); benign today, but it must be fixed before the injected block
-  is moved or extended.
+- The log path is blocking: `reply_to_pctool` (file `0x1A8BC`) calls the event
+  pump at file `0x2D2F0`, whose wait
+  (`while ([0x9F1CC118] == 0) usb_gadget_handle_interrupts();`, file `0x2D314`)
+  has no timeout, so a host that stops reading can freeze u-boot mid-boot.
+- The injected code addresses the gate byte 0x200 too high: it really lives at
+  file `0x1BE34` (in the *next* dead function, on an `add` instruction), not at
+  the `0x1BC34` the patch layout names.  Benign today - both functions are
+  unreachable - but it must be fixed before the injected block is moved or
+  extended.
 - `[0x30]` must stay `0x75EF0` and the image must stay 484260 bytes (vboot
   sechdr base - changing either reset-loops the watch).
 

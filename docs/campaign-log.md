@@ -64,8 +64,9 @@ image, boots normally, no integrity check.
   It then stalls at the panel read-ID step.
 - Side effect: the forced branch also runs the tool handshake waits, making
   boot ~8 s slower (`lcd start init time` 4004 ms -> 12148 ms).  v27/v28
-  (built by `patch/make_log_images.py`) targeted exactly this, but were never
-  tested and have been discarded (2026-09-28).  v26 is the kept version, 0.0.1.
+  (built by an earlier revision of `patch/make_log_images.py`, which today
+  builds only 0.0.1) targeted exactly this, but were never tested and have been
+  discarded (2026-09-28).  v26 is the kept version, 0.0.1.
 
 ## Traps worth remembering
 
@@ -78,3 +79,8 @@ image, boots normally, no integrity check.
 6. The live u-boot console is the ONLY channel for failed boots: the
    uboot_log partition records successful boots only, and UART is
    electrically unreachable on this watch (1.8 V vs 3.3 V).
+7. A patch constant copied from a disassembly keeps its own page base: the
+   injected code's gate lands at file `0x1BE34` (0x200 above the intended
+   `0x1BC34`) because `adrp 0x9F01B000` was paired with `#0xC34` instead of
+   `#0xA34`.  It still works only because the stub and the log fn repeat the
+   same mistake - see `uboot-internals.md` section 4.
