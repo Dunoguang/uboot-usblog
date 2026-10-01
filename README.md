@@ -60,6 +60,11 @@ be checked without a device at all:
                                     reference/usblog-0.0.1-full.bin
     # -> host lines 67, device lines 67, mismatches 0
 
+The same 2608-byte result is reproduced by both readers: the Windows COM one and
+`tools/usb_reader.py` on Linux (libusb, run from Arch hosted on an Android
+phone).  `usb_reader.py` logs the capture with its own timestamps, which is how
+the 64-byte defect and the control-request stalls were localised.
+
 Earlier images stopped after 240 bytes.  Why, and how that was found and fixed:
 section 4 and `docs/internals.md` section 4.
 
