@@ -1,0 +1,67 @@
+USB SERIAL PORT OPENED
+** File not found /recovery/last_memory **
+lcd start init time:2281ms
+sprd backlight power brightness=0
+phy status0 1f00
+phy status 1f00
+phy status1 1f00
+phy status2 1f1a
+sprdfb: mipi_dispc_init_config not support TE
+co5300_readid read id value is 0x33,0x11,0x0,0x0!  and return counter:0
+uboot co5300_mipi_init
+sprd backlight power brightness=25
+uboot consume time:2706ms, lcd init consume:920ms, backlight on time:3201ms 
+sprd_get_vboot_key(): load_buf is 0x9efffe00.
+sprd_get_vboot_key(): sechdr_offset is 0x760f0.
+sprd_get_vboot_key(): sechdr_addr is 0x9f075ef0.
+sprd_get_vboot_key(): sechdr_addr: 0x9f075ef0. cert_addr: 0x9f075f50. cert_addr: 0x9f075f50. cert_addr: 0x9f075f50. 
+sprd_get_vboot_key(): sechdr_offset is 0x760f0, sechdr_addr->cert_offset is 0x76150.
+cert_key
+dumpHex:32 bytes
+7728e30f50bfa5cea165f473175a0880
+3f6a8346642b5aa10913e9d9e6defef6
+
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16382 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16382 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+read  successed
+sprd_get_imgversion: rpmb read blk 16380 successful 
+invalid sprd imgversion magic 0 exp a50000a5 
+pass_chip_uid_to_tos()... sizeof(blocks)=8
+blks:0x00744806 0x0c208b23, result: 0x0 
+uboot_set_rpmb_size: rpmb size 4194304
+is_wr_rpmb_key rpmb key has been written
+init_log_partition_hdr(): init log partition header sucess!

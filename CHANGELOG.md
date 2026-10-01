@@ -7,6 +7,56 @@ Versioning was restarted on 2026-09-28.  Everything that had been tried before
 real hardware - v26 - was promoted to be the baseline release, 0.0.1.  The
 history of how it was found is in [`docs/campaign-log.md`](docs/campaign-log.md).
 
+## [0.0.10] - 2026-10-01
+
+**The live USB log is complete.**  `images/uboot-0.0.10-chunked.img`,
+484260 bytes, md5 `aa780e3b519d59aa65979def9b83eb44`, built by
+`patch/make_log_images_010.py`.
+
+    240 bytes -> 2608 bytes, ending at
+                 `init_log_partition_hdr(): init log partition header sucess!`
+
+- **Fixed: any console line longer than 64 bytes killed the log permanently.**
+  The injected log fn passed the whole line to `reply_to_pctool`, which ends in a
+  single pump call waiting for a single IN-endpoint completion - i.e. one max
+  packet.  Past 64 bytes the completion count and the pump count stop matching,
+  the ring never drains again, and because the pump is bounded the boot carries
+  on printing into a ring nothing will ever read.  The log fn now walks the
+  string and calls `reply_to_pctool` once per **<= 63-byte piece**
+  (`0x1BCA8`: `bl LOG` -> `bl LOG2` at `0x1BD80`, 39 instructions).
+- Measured, not inferred: with 0.0.5 the host received exactly 240 bytes and the
+  COM port stayed enumerated for a further 4.8 s (so nothing was torn down - the
+  device simply stopped handing data over).  The nine lines that arrived are all
+  <= 46 bytes; the tenth is 70.  A throwaway data-only image that shortened
+  *only* that one format string to a 16-byte line made it arrive, and the stream
+  then stopped again at the next long line.
+- **Verified against the device**: that boot's own `uboot_log` slot contains
+  `lcd start init time:2281ms`; from `USB SERIAL PORT OPENED` to the end it is
+  **67 lines, byte-for-byte identical to the 67 lines the host received**.
+  Raw capture: `reference/usblog-0.0.10-full.bin`.
+- New `tools/read_com_log.py`: Windows reader for the U2S port over the
+  `sprdvcom` COM interface - 1-byte blocking reads (a read URB is always armed),
+  per-line timestamps, and a COM-port-presence poll.  No libusb, no UsbDk.
+- New `tools/verify_capture.py`: compares a live capture against the device's
+  own `uboot_log` slot.
+- Full write-up: [`docs/root-cause-64-byte.md`](docs/root-cause-64-byte.md).
+
+Also landed while getting here (kept, all folded into 0.0.10):
+
+- **0.0.2** - correct gate address (`0xA34`, the VA's low 12 bits - the 0.0.1
+  block used the file offset's `0xC34` and therefore the wrong byte); bounded
+  log pump (the 0.0.1 stall); no pctool command wait.
+- **0.0.3 / 0.0.4** - longer calibrate wait windows.  Inert, and measurably so:
+  in a no-host boot both wait loops leave through their flag, not their timeout.
+- **0.0.5** - `usb_gate_wait` at the trigger: polls the gser "port opened" flag
+  so u-boot holds the channel open until the host has opened the port, instead
+  of racing a 2 s budget.
+- **0.0.6 / 0.0.7 / 0.0.8** - trace markers.  0.0.6's ring markers never
+  appeared (the ring was already dead - itself a clue).  0.0.9 is the data-only
+  probe described above and is kept as `images/uboot-0.0.9-lentest-probe.img`.
+  0.0.8 called `printf` from inside the pump and hung the watch; never call
+  `printf` from the console path.
+
 ## [Unreleased]
 
 ### Documentation

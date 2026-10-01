@@ -109,3 +109,51 @@ Fix: create the node from sysfs and keep it fresh - sysfs
 `tools/mk_usb_node.sh` does this in a loop for 1782:4d00 (run it with
 nohup before the reader).  Symptom to remember: the reader prints only
 `listen ...s` while `lsusb` already shows the device.
+
+## 7. Windows: reading over the vendor COM port instead of libusb
+
+On Windows the watch is claimed by `sprdvcom.sys`, which exposes the same
+interface as a COM port (Ports class, `Service=sprdvcom` - **not** the USB
+class, which matters if you are tempted to filter it).  `libusb_open` returns
+`LIBUSB_ERROR_NOT_SUPPORTED` because the driver owns the device.
+
+You do not need libusb, and you do not need UsbDk.  Open the COM port instead -
+`tools/read_com_log.py` - but two details are not optional:
+
+- **Keep a read URB armed at all times.**  Polling `BytesToRead` or using
+  `ReadTimeout = 0` lets the driver's queue run dry and the log stalls early.
+  The tool issues 1-byte `ReadFile` calls with all `COMMTIMEOUTS` zeroed, i.e.
+  blocking until a byte arrives; `SetDTR` after opening is what makes `gser_setup`
+  see `SET_CONTROL_LINE_STATE wValue == 1`.
+- **Poll COM-port presence while you read.**  This is what distinguishes "the
+  device stopped sending" from "the link went away", and it is how the 64-byte
+  defect was found: the port stayed alive 4.8 s past the last byte, which ruled
+  out a reset or a torn-down gadget.
+
+The port only exists while u-boot runs - it is gone in Android and in recovery -
+so start the reader *before* rebooting the watch; the tool waits up to 45 s for
+the port to appear.
+
+### 7.1 Flashing on Windows: `scc.exe` needs a real console
+
+`scc.exe` (SPRDClientExample) draws its partition-write progress display with
+`System.Console` cursor/window APIs.  Run it with stdout/stderr redirected to a
+file or a pipe - which is what any scripted harness does - and those APIs throw
+`IOException: The handle is invalid.` (zh-CN `句柄无效。`) **the moment the write
+starts**, so every write aborts with `发生错误: 句柄无效。` right after
+`开始写入uboot分区`.  Handshake, fdl1 and fdl2 all succeed; only the write dies.
+
+Fix: give it its own console and scrape that console from outside.
+
+    con = spawn_with_console([scc, 'fdl','1','0x5000', ...])   # CREATE_NEW_CONSOLE
+    ConsoleCapture(con.pid).open()                             # AttachConsole + CONOUT$
+
+`tools/concap.py` does exactly this (and hides the window with
+`STARTF_WINDOW`/`SW_HIDE`, so the user sees nothing).  Note that
+`ReadConsoleOutputCharacter` must be called **one row at a time**: a single
+block read returns a short character count that is not a multiple of the row
+width and cannot be sliced back into lines.
+
+Same trap on the PowerShell side: a `.ps1` containing non-ASCII must be saved
+with a BOM, because Windows PowerShell 5.1 reads BOM-less scripts as ANSI and
+the Chinese string literals break the parser.

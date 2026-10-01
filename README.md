@@ -5,10 +5,18 @@ time, and read it from a host with libusb.  No device disassembly, no UART.
 Built for debugging DW99 / vp19 watches (e.g. the 4.4 / 4.4.302 kernel line
 that "does not boot and prints nothing").
 
-> **Current version: 0.0.1** - `images/uboot-0.0.1.img`
-> (484260 bytes, md5 `9a1d5975d299363045fbc702aa3e8fcd`).
-> The live USB log is verified on real hardware with this image; see
-> [`CHANGELOG.md`](CHANGELOG.md) for what it contains and what is still broken.
+> **Current version: 0.0.10** - `images/uboot-0.0.10-chunked.img`
+> (484260 bytes, md5 `aa780e3b519d59aa65979def9b83eb44`).
+> The live USB log is verified on real hardware and is now **complete**: 2608
+> bytes, ending at `init_log_partition_hdr(): init log partition header sucess!`
+> - the last line u-boot prints before the kernel - and byte-for-byte identical
+> to that boot's own `uboot_log` slot.  See [`CHANGELOG.md`](CHANGELOG.md) and
+> [`docs/root-cause-64-byte.md`](docs/root-cause-64-byte.md).
+>
+> 0.0.10 fixes the defect that made 0.0.1..0.0.8 stop after 240 bytes: the
+> injected log fn handed whole console lines to `reply_to_pctool`, and any line
+> longer than the 64-byte USB max packet size killed the stream permanently.
+> 0.0.10 splits every line into <= 63-byte pieces.
 >
 > On 2026-09-28 every other experiment (v1..v25, v27..v29) was discarded and the
 > verified v26 was promoted to be the baseline, version 0.0.1.  The record of how
@@ -20,7 +28,15 @@ that "does not boot and prints nothing").
 > (This README was rewritten in English because the authoring environment
 > silently corrupts non-ASCII input.  A Chinese version is welcome as a PR.)
 
-## 1. Working recipe (verified 2026-09-26, both parts required)
+## 1. Working recipe
+
+### 1.0 Log fn must not exceed one max packet (0.0.10, the fix for 0.0.1..0.0.8)
+- `reply_to_pctool` ends in a single pump call that waits for a single IN-endpoint
+  completion, i.e. one 64-byte packet.  Hand it a longer buffer and the ring
+  never drains again - silently, forever, while u-boot keeps booting.
+- 0.0.10 therefore walks the string and calls `reply_to_pctool` once per
+  **<= 63-byte piece**.  Evidence and the throwaway probe image that proved it:
+  [`docs/root-cause-64-byte.md`](docs/root-cause-64-byte.md).
 
 ### 1.1 Console hook
 - `file 0xE798` (puts entry) -> `b` to `0x1BC9C`, inside a never-called
@@ -52,8 +68,19 @@ that "does not boot and prints nothing").
 
 | image | md5 | what |
 |---|---|---|
-| `images/uboot-0.0.1.img` | `9a1d5975...` | **version 0.0.1**: console hook + forced channel allocation; 258 bytes captured on hardware |
+| `images/uboot-0.0.10-chunked.img` | `aa780e3b...` | **current**: 0.0.5 + the log fn chunked to <= 63 bytes; **2608-byte complete live log, verified against the device's own uboot_log slot** |
+| `images/uboot-0.0.5-gatewait.img` | `38192ec8...` | hook + bounded pump + `usb_gate_wait`; still stops at 240 bytes (the 64-byte defect) |
+| `images/uboot-0.0.2.img` | `fb0186e8...` | 0.0.1 + correct gate address, bounded pump, no pctool wait |
+| `images/uboot-0.0.1.img` | `9a1d5975...` | the original verified release: console hook + forced channel allocation; 258 bytes captured |
 | `images/uboot.img` | `a03efc26...` | the unlock baseline every patch is built from - not a release |
+
+- `patch/make_log_images_010.py` - rebuild `images/uboot-0.0.10-chunked.img` from
+  the baseline (imports the 0.0.1/0.0.2/0.0.5 generators, so the whole stack is
+  reproducible from one command).
+- `tools/read_com_log.py` - **Windows** reader for the SPRD U2S port over the
+  `sprdvcom` COM interface: 1-byte blocking reads so a URB is always armed,
+  microsecond timestamps per line, and a once-a-second COM-port-presence poll
+  (that poll is what proved the gadget is not torn down when the log stops).
 
 - `tools/usb_reader.py` - host reader (libusb via ctypes, no deps); accepts
   only `1782:4d00` with `bcdDevice 0x2416`, sends DTR/RTS after claiming the
@@ -69,13 +96,22 @@ that "does not boot and prints nothing").
   `images/uboot.img`, with asserts on the baseline and an md5 self-check.
   Verified 2026-09-28: it reproduces the released image byte for byte.
 
-## 3. Known issues of 0.0.1
+## 3. Known issues of 0.0.1 (all four fixed by 0.0.10)
+
+> **Resolved 2026-10-01.**  The 240-byte stop was *not* only the blocking pump.
+> With the pump bounded (0.0.2) the boot completed normally and the screen came
+> up, yet the host still received exactly 240 bytes and then nothing, while the
+> port stayed enumerated for another 4.8 s.  The real limit is the transfer
+> size: `reply_to_pctool` must never be handed more than one 64-byte max packet.
+> Measured, proved with a data-only probe image and fixed by chunking -
+> [`docs/root-cause-64-byte.md`](docs/root-cause-64-byte.md).  The four items
+> below are kept as history.
 
 - The boot stops right after `sprdfb: mipi_dispc_init_config not support TE`
   and the screen stays dark.  The stall is between that print (file `0x3314C`,
   the printf call; the string is loaded at `0x33140`) and the panel read-ID
   printf call (file `0x3445C`; the format string
-  `co5300_readid read id value is 0x%x,...` is loaded at `0x343BC`).
+  `co5300_readid read id value is 0x%x,...` is at file `0x65259`).
   The cause is **not** the panel: the read-ID path retries at most 4 times and
   every DSI wait is bounded, while the console send path this patch adds has no
   timeout at all - the next console write after the TE line parks u-boot in the
