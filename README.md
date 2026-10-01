@@ -243,13 +243,13 @@ patch/
   verify_image.py           disassemble + check a built image before flashing
 tools/
   read_com_log.py           Windows reader: U2S COM port, blocking reads, presence poll
-  usb_reader.py             Linux reader: libusb via ctypes, EP 0x85
+  usb_reader.py             Linux reader: libusb via ctypes, EP 0x85; creates the
+                            /dev/bus/usb node itself when the dev tree lacks it
   verify_capture.py         compare a live capture against the device's uboot_log slot
   concap.py                 run a console program in its own hidden console and scrape it
   scc_console.py            one-shot wrapper around concap.py for scc.exe
   parse_uboot_log.py        uboot_log slot parser (magic 0xABCD, 256 KB slots)
   dump_uboot_log.sh         pull + parse uboot_log over adb
-  mk_usb_node.sh            keep /dev/bus/usb nodes alive inside a container
 docs/
   internals.md              addresses, patch layout, pseudocode, the 64-byte rule, traps
   host-side.md              reading (Windows/Linux), flashing, BROM recovery, pitfalls

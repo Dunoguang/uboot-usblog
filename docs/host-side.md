@@ -76,9 +76,14 @@ without it.
   never produce a log.  The reader says which one it found instead of spinning
   silently.
 
-`tools/mk_usb_node.sh` keeps `/dev/bus/usb` nodes alive inside a container.
-Symptom without it: the reader prints only `no 1782:4d00 device`, while `lsusb`
-already shows the watch.
+- **`/dev/bus/usb` nodes are created if they are missing.**  On a normal PC udev
+  does this and the reader does nothing.  Inside a container, a chroot, or an
+  Arch install hosted on an Android phone - where `/dev` is a minimal snapshot
+  with *no* `/dev/bus/usb` at all - it builds `/dev/bus/usb/BBB/DDD` from sysfs
+  before opening (usb_device is char major 189, minor
+  `(bus - 1) * 128 + devnum - 1`).  Without it the symptom is nasty: `lsusb`
+  lists the watch, the reader's own enumeration finds it too, and `libusb_open`
+  fails anyway.  Needs root or `CAP_MKNOD`; `--no-mknod` turns it off.
 
 ## 4. Checking a capture without trusting it
 

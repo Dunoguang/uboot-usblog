@@ -45,7 +45,15 @@ Everything below is here because something went wrong without it.
     differently later, so re-enumerate rather than exiting.  Bus number and
     device address change on every re-enumeration, so never cache them.
 
-6.  In a container `/dev/bus/usb` may simply not exist; `--list` says so.
+6.  `/dev/bus/usb` may not exist at all.
+    On a normal PC udev creates the nodes.  Inside a container, a chroot, or an
+    Arch install hosted on an Android phone - all of which this has been run in -
+    `/dev` is a minimal snapshot with **no `/dev/bus/usb` directory**, and then
+    libusb still *enumerates* the watch (it reads sysfs) but `libusb_open` fails:
+    the reader looks broken while `lsusb` happily lists the device.  So the
+    reader creates the node itself from sysfs before opening - usb_device is
+    major 189, and the minor is `(bus - 1) * 128 + devnum - 1`.  Needs root or
+    CAP_MKNOD; `--no-mknod` turns it off.
 """
 from __future__ import annotations
 
@@ -54,6 +62,7 @@ import ctypes
 import ctypes.util
 import os
 import signal
+import stat
 import sys
 import time
 
@@ -66,6 +75,8 @@ IFACE = 0
 TIMEOUT_MS = 500            # per bulk read; the URB stays armed for all of it
 KEEPALIVE_S = 2.0           # re-assert DTR at least this often
 POLL_DEVICE_S = 0.25        # how often to re-enumerate while waiting
+SYSFS_USB = '/sys/bus/usb/devices'
+USB_DEV_MAJOR = 189         # usb_device; the node the kernel exposes per device
 
 ERRORS = {
     0: 'SUCCESS', -1: 'IO', -2: 'INVALID_PARAM', -3: 'ACCESS', -4: 'NO_DEVICE',
@@ -167,6 +178,8 @@ class Reader:
         self.last_dtr = 0.0
         self.t0 = time.time()
         self.out = None
+        self.warned_mknod = False
+        self.made_nodes = set()
 
     # -- reporting ---------------------------------------------------------
     def t(self):
@@ -175,9 +188,64 @@ class Reader:
     def say(self, msg):
         print('[%7.3f] %s' % (self.t(), msg), flush=True)
 
+    # -- /dev/bus/usb nodes ------------------------------------------------
+    def make_nodes(self):
+        """Create /dev/bus/usb/BBB/DDD for the watch if the dev tree lacks them.
+
+        libusb enumerates from sysfs, so it *sees* the watch even when /dev has
+        no bus nodes - it is libusb_open that then fails.  usb_device is char
+        major 189, minor `(bus - 1) * 128 + devnum - 1`.
+
+        Runs every enumeration pass and costs a few stat() calls; a node is only
+        created when it is actually missing, so a normal PC (udev) does nothing
+        here.
+        """
+        if self.a.no_mknod or not hasattr(os, 'mknod') or not os.path.isdir(SYSFS_USB):
+            return
+        try:
+            entries = os.listdir(SYSFS_USB)
+        except OSError:
+            return
+        for e in entries:
+            d = os.path.join(SYSFS_USB, e)
+            try:
+                if open(os.path.join(d, 'idVendor')).read().strip().lower() != '%04x' % VID:
+                    continue
+                if open(os.path.join(d, 'idProduct')).read().strip().lower() != '%04x' % PID:
+                    continue
+                maj, mi = (int(x) for x in open(os.path.join(d, 'dev')).read().strip().split(':'))
+                bus = int(open(os.path.join(d, 'busnum')).read().strip())
+                dn = int(open(os.path.join(d, 'devnum')).read().strip())
+            except (OSError, ValueError):
+                continue
+            path = '/dev/bus/usb/%03d/%03d' % (bus, dn)
+            if os.path.exists(path) or path in self.made_nodes:
+                continue
+            if USB_DEV_MAJOR != 0 and maj != USB_DEV_MAJOR:
+                self.say('note: %s reports major %d, expected %d'
+                         % (e, maj, USB_DEV_MAJOR))
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                os.mknod(path, stat.S_IFCHR | 0o666, os.makedev(maj, mi))
+                os.chmod(path, 0o666)
+                self.made_nodes.add(path)
+                self.say('created %s (%d:%d) - /dev/bus/usb was missing'
+                         % (path, maj, mi))
+            except PermissionError:
+                self.made_nodes.add(path)
+                if not self.warned_mknod:
+                    self.warned_mknod = True
+                    self.say('cannot create %s (%d:%d): permission denied.'
+                             % (path, maj, mi))
+                    self.say('  run as root (sudo), or fix /dev another way.')
+            except OSError as ex:
+                self.made_nodes.add(path)
+                self.say('mknod %s failed: %s' % (path, ex))
+
     # -- enumeration -------------------------------------------------------
     def find(self):
         """Return (dev, dd, bus, addr) for 1782:4d00, or (None, ...) plus a note."""
+        self.make_nodes()
         lst = ctypes.POINTER(ctypes.c_void_p)()
         n = L.libusb_get_device_list(self.ctx, ctypes.byref(lst))
         if n < 0:
@@ -432,12 +500,14 @@ def main():
                     help='open, claim and send the control requests, then exit')
     ap.add_argument('--list', action='store_true',
                     help='list USB devices and exit')
+    ap.add_argument('--no-mknod', action='store_true',
+                    help='do not create missing /dev/bus/usb nodes')
     a = ap.parse_args()
 
-    if a.list:
-        return do_list()
-
     r = Reader(a)
+    if a.list:
+        r.make_nodes()          # so --list reflects what is actually usable
+        return do_list()
     stop = {'n': False}
 
     def on_int(_sig, _frm):
