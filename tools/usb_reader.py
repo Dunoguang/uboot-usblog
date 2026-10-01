@@ -215,11 +215,18 @@ class Reader:
         self.dd = dd
 
         def s(idx):
+            """String descriptor as text.  Never let a weird descriptor kill
+            the reader: a c_ubyte array has no .value (that was a real bug)."""
             if not idx:
                 return ''
-            b = (ctypes.c_ubyte * 128)()
-            r = L.libusb_get_string_descriptor_ascii(h, idx, b, 128)
-            return b.value.decode('utf-8', 'replace') if r > 0 else '?'
+            try:
+                b = (ctypes.c_ubyte * 128)()
+                r = L.libusb_get_string_descriptor_ascii(h, idx, b, 128)
+                if r <= 0:
+                    return '?'
+                return bytes(b[:r]).decode('utf-8', 'replace')
+            except Exception as e:                       # noqa: BLE001
+                return '? (%s)' % e
 
         self.say('device  %s' % self.describe(bus, addr, dd))
         self.say('        %s / %s' % (s(dd.iManufacturer), s(dd.iProduct)))
@@ -280,10 +287,11 @@ class Reader:
     # -- output ------------------------------------------------------------
     def emit(self, raw):
         self.total += len(raw)
-        try:
-            self.out.write(raw)
-        except OSError:
-            pass
+        if self.out is not None:
+            try:
+                self.out.write(raw)
+            except OSError:
+                pass
         printable = ''.join(chr(b) if 32 <= b < 127 else
                             ('\\r' if b == 13 else '\\n' if b == 10 else '.')
                             for b in raw)
@@ -363,7 +371,14 @@ class Reader:
                 continue
 
             announced.clear()
-            if not self.open(dev, dd, bus, addr):
+            try:
+                ok = self.open(dev, dd, bus, addr)
+            except Exception as e:                       # noqa: BLE001
+                self.say('setup raised %s: %s' % (type(e).__name__, e))
+                self.close()
+                time.sleep(0.5)
+                continue
+            if not ok:
                 time.sleep(0.5)
                 continue
             if self.a.check:
