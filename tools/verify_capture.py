@@ -1,53 +1,103 @@
-"""Verify the live USB capture against the device's own uboot_log slot.
+#!/usr/bin/env python3
+"""Reconcile a live USB capture with the device's own uboot_log record.
 
-The boot under test printed `lcd start init time:2281ms`; find the slot that
-contains it (that is this boot), take everything from `USB SERIAL PORT OPENED`
-to the end, and compare line by line with the 2608 bytes the host received.
+    python3 tools/verify_capture.py p11.bin capture.bin
+
+Dump p11 first (from recovery, as root):
+
+    adb shell "dd if=/dev/block/mmcblk0p11 bs=4096" > p11.bin
+
+The uboot_log partition is `header (magic 0xABCD, data offset 0x200, N entries)
++ N x 256 KB slots`, one slot per recorded boot, and a slot is only written when
+the boot **completed**.  So for a successful boot this gives an independent,
+device-side copy of the same console output, which is exactly what you want to
+check a capture against.
+
+The tool finds the slot belonging to the boot that produced the capture (by the
+`lcd start init time:<n>ms` line, which is unique per boot), then compares from
+`USB SERIAL PORT OPENED` to the end.
 """
+import os
 import struct
+import sys
 
-F = r'C:\Users\Administrator\Documents\deepseek-harness\default-workspace'
-p11 = open(F + r'\p11-after-010.bin', 'rb').read()
-cap = open(F + r'\usblog-010.bin', 'rb').read().decode('utf-8', 'replace')
+MAGIC = 0xABCD
+HDR = 0x200
+START_MARK = 'USB SERIAL PORT OPENED'
+BOOT_MARK = 'lcd start init time:'
 
-n = struct.unpack_from('<I', p11, 0x0C)[0]
-slots = []
-for i in range(n):
-    ln = struct.unpack_from('<I', p11, 0x1C + i * 12 + 0)[0]
-    sz = struct.unpack_from('<I', p11, 0x1C + i * 12 + 4)[0]
-    off = 0x200 + i * sz
-    slots.append((i, off, p11[off:off + ln].decode('utf-8', 'replace')))
 
-MARK = 'lcd start init time:2281ms'
-hit = [s for s in slots if MARK in s[2]]
-print("slots containing %r: %s" % (MARK, [s[0] for s in hit]))
-if not hit:
-    print("!! this boot wrote no uboot_log slot")
-    raise SystemExit(1)
+def load_slots(path):
+    b = open(path, 'rb').read()
+    if len(b) < HDR or struct.unpack_from('<I', b, 0)[0] != MAGIC:
+        raise SystemExit('%s: not a uboot_log partition (magic %#x expected)'
+                         % (path, MAGIC))
+    n = struct.unpack_from('<I', b, 0x0C)[0]
+    out = []
+    for i in range(n):
+        ln = struct.unpack_from('<I', b, 0x1C + i * 12 + 0)[0]
+        sz = struct.unpack_from('<I', b, 0x1C + i * 12 + 4)[0]
+        off = HDR + i * sz
+        if off + ln > len(b):
+            continue
+        out.append((i, off, ln, b[off:off + ln].decode('utf-8', 'replace')))
+    return out
 
-i, off, txt = hit[0]
-print("using slot %d (off 0x%06X, %d bytes)" % (i, off, len(txt)))
 
-# device side: from the port-opened line to the end
-dev_lines = txt.splitlines()
-start = next(k for k, l in enumerate(dev_lines) if 'USB SERIAL PORT OPENED' in l)
-dev = dev_lines[start:]
+def main():
+    if len(sys.argv) < 3:
+        print(__doc__)
+        return 2
+    p11, cap_path = sys.argv[1], sys.argv[2]
 
-host_lines = cap.replace('\r\n', '\n').split('\n')
-while host_lines and not host_lines[-1].strip():
-    host_lines.pop()
+    cap = open(cap_path, 'rb').read().decode('utf-8', 'replace')
+    host = cap.replace('\r\n', '\n').split('\n')
+    while host and not host[-1].strip():
+        host.pop()
 
-print("\nhost lines: %d   device lines (from port-open): %d\n" % (len(host_lines), len(dev)))
+    boot = next((l.strip() for l in host if BOOT_MARK in l), None)
+    if boot is None:
+        print('capture does not contain %r - cannot identify the boot' % BOOT_MARK)
+        return 2
+    print('capture : %s (%d bytes, %d lines)' % (cap_path, len(cap), len(host)))
+    print('boot id : %s' % boot)
 
-mismatch = 0
-for k in range(max(len(host_lines), len(dev))):
-    h = host_lines[k].rstrip() if k < len(host_lines) else '<missing>'
-    d = dev[k].rstrip() if k < len(dev) else '<missing>'
-    if h != d:
-        mismatch += 1
-        if mismatch <= 12:
-            print("  line %3d DIFF\n     host: %r\n     dev : %r" % (k, h, d))
+    slots = load_slots(p11)
+    hits = [s for s in slots if boot in s[3]]
+    if not hits:
+        print('\nNo uboot_log slot contains that boot.')
+        print('Either the boot did not complete (a slot is only written for a')
+        print('successful boot), or this p11 dump predates it.')
+        return 1
 
-print("\n%d mismatched lines out of %d" % (mismatch, max(len(host_lines), len(dev))))
-print("VERDICT:", "IDENTICAL - the live USB log is complete"
-      if mismatch == 0 else "differences above")
+    i, off, ln, txt = hits[0]
+    print('slot    : %d (offset %#x, %d bytes)\n' % (i, off, ln))
+
+    dev_lines = txt.splitlines()
+    try:
+        start = next(k for k, l in enumerate(dev_lines) if START_MARK in l)
+    except StopIteration:
+        print('slot %d has no %r line' % (i, START_MARK))
+        return 1
+    dev = dev_lines[start:]
+
+    n = max(len(host), len(dev))
+    bad = 0
+    for k in range(n):
+        a = host[k].rstrip() if k < len(host) else '<missing>'
+        b = dev[k].rstrip() if k < len(dev) else '<missing>'
+        if a != b:
+            bad += 1
+            if bad <= 12:
+                print('  line %3d DIFF\n     host   : %r\n     device : %r' % (k, a, b))
+
+    print('host lines %d, device lines %d, mismatches %d' % (len(host), len(dev), bad))
+    if bad == 0:
+        print('\nIDENTICAL - the live USB log is complete for this boot.')
+        return 0
+    print('\nDIFFERENT - see the lines above.')
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

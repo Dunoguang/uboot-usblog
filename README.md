@@ -1,214 +1,282 @@
-# uboot-usblog - DW99 / vp19 (Spreadtrum SL8541E) uboot USB log capture
+# uboot-usblog - real-time u-boot console over USB for the DW99 / vp19 watch
 
-Patch a Spreadtrum u-boot so that its boot log streams out over USB in real
-time, and read it from a host with libusb.  No device disassembly, no UART.
-Built for debugging DW99 / vp19 watches (e.g. the 4.4 / 4.4.302 kernel line
-that "does not boot and prints nothing").
+Patch a Spreadtrum u-boot so its boot log streams out over USB **live**, and read
+it from a host with no device disassembly, no UART and no working kernel.  Built
+for watches that "do not boot and print nothing" - where the on-flash log
+partition is empty precisely because the boot failed.
 
-> **Current version: 0.0.10** - `images/uboot-0.0.10-chunked.img`
-> (484260 bytes, md5 `aa780e3b519d59aa65979def9b83eb44`).
-> The live USB log is verified on real hardware and is now **complete**: 2608
-> bytes, ending at `init_log_partition_hdr(): init log partition header sucess!`
-> - the last line u-boot prints before the kernel - and byte-for-byte identical
-> to that boot's own `uboot_log` slot.  See [`CHANGELOG.md`](CHANGELOG.md) and
-> [`docs/root-cause-64-byte.md`](docs/root-cause-64-byte.md).
->
-> 0.0.10 fixes the defect that made 0.0.1..0.0.8 stop after 240 bytes: the
-> injected log fn handed whole console lines to `reply_to_pctool`, and any line
-> longer than the 64-byte USB max packet size killed the stream permanently.
-> 0.0.10 splits every line into <= 63-byte pieces.
->
-> On 2026-09-28 every other experiment (v1..v25, v27..v29) was discarded and the
-> verified v26 was promoted to be the baseline, version 0.0.1.  The record of how
-> it was found is kept in [`docs/campaign-log.md`](docs/campaign-log.md); the
-> defects that are still open are listed in section 3 below.
->
-> Full notes: [`docs/`](docs/README.md) - internals, campaign log, host side.
->
-> (This README was rewritten in English because the authoring environment
-> silently corrupts non-ASCII input.  A Chinese version is welcome as a PR.)
+- Target: DW99 / vp19, UNISOC/Spreadtrum **SL8541E** (`sl8541e_1h10`, model
+  `S10_Max`), u-boot `2015.07 (Oct 28 2024 - 18:20:07)`, sharklE.
+- Release: **`images/uboot-0.0.1.img`** - 484260 bytes,
+  md5 `aa780e3b519d59aa65979def9b83eb44`.
+- Channel: the U2S **"calibrate" port** (vendor interface `1782:4d00`,
+  `bcdDevice 0x2416`, bulk EP 0x85), repurposed as a log drain.
+- Guarantee: the log is **best-effort and bounded**.  It can never block or
+  delay the boot, whether or not a host is listening.
 
-## 1. Working recipe
+---
 
-### 1.0 Log fn must not exceed one max packet (0.0.10, the fix for 0.0.1..0.0.8)
-- `reply_to_pctool` ends in a single pump call that waits for a single IN-endpoint
-  completion, i.e. one 64-byte packet.  Hand it a longer buffer and the ring
-  never drains again - silently, forever, while u-boot keeps booting.
-- 0.0.10 therefore walks the string and calls `reply_to_pctool` once per
-  **<= 63-byte piece**.  Evidence and the throwaway probe image that proved it:
-  [`docs/root-cause-64-byte.md`](docs/root-cause-64-byte.md).
+## 1. Verified result
 
-### 1.1 Console hook
-- `file 0xE798` (puts entry) -> `b` to `0x1BC9C`, inside a never-called
-  function body in the dead-code area (the injected block spans file
-  `0x1BC34..0x1BCB7`, inside the dead fastboot handler `0x1BC34..0x1BED8`).
-- Hook: redo the prologue -> call the log fn -> jump back to `0xE79C`.
-- Log fn at `0x1BC4C`: read the gate byte -> if 0, return immediately;
-  otherwise clear the gate first (re-entrancy guard) -> inline strlen loop ->
-  `bl 0x1A8BC` (reply_to_pctool) -> restore the gate -> ret.
-- The gate is set at `file 0x1A768`, the printf call site of
-  "USB SERIAL PORT OPENED" (trigger stub at `0x1BC38`).
-- The gate byte the code actually reads and writes is at file **`0x1BE34`**,
-  not `0x1BC34` - the stub and the log fn agree on that address, which is why
-  0.0.1 works.  See section 3 before touching the block.
+```
+USB SERIAL PORT OPENED
+** File not found /recovery/last_memory **
+lcd start init time:2281ms
+sprd backlight power brightness=0
+phy status0 1f00 / phy status 1f00 / phy status1 1f00 / phy status2 1f1a
+sprdfb: mipi_dispc_init_config not support TE
+co5300_readid read id value is 0x33,0x11,0x0,0x0!  and return counter:0
+uboot co5300_mipi_init
+sprd backlight power brightness=25
+uboot consume time:2706ms, lcd init consume:920ms, backlight on time:3201ms
+sprd_get_vboot_key(): load_buf is 0x9efffe00.
+sprd_get_vboot_key(): sechdr_offset is 0x760f0.
+sprd_get_vboot_key(): sechdr_addr is 0x9f075ef0.
+sprd_get_vboot_key(): sechdr_addr: 0x9f075ef0. cert_addr: 0x9f075f50. ...
+cert_key / dumpHex:32 bytes / ...
+read successed / sprd_get_imgversion: rpmb read blk 16380 successful / ...
+pass_chip_uid_to_tos()... sizeof(blocks)=8
+blks:0x00744806 0x0c208b23, result: 0x0
+uboot_set_rpmb_size: rpmb size 4194304
+is_wr_rpmb_key rpmb key has been written
+init_log_partition_hdr(): init log partition header sucess!
+```
 
-### 1.2 Force the channel allocation (the critical part)
-- Without a tool handshake u-boot prints
-  `usb calibrate port open timeout3871,1870,2000` and **skips the 8 KB
-  gserial channel allocation** (the `bl 0x9F02CDFC` at file `0x1A758` sits on
-  the "port opened" branch).
-- Patching `file 0x1A720` from `cbnz w0,+0x38` to `b +0x38` makes u-boot
-  allocate the channel, which is what lets any byte reach the host.  It is
-  **optional since 2026-09-28**: the host must assert DTR only
-  (`SET_CONTROL_LINE_STATE` with `wValue = 1`), then u-boot's own port-open wait
-  succeeds and allocates the channel without any patch here - see
-  [`docs/te-stall-analysis.md`](docs/te-stall-analysis.md) section 4.
+**2608 bytes, 67 lines**, ending at the last line u-boot prints before the
+kernel.  The port then disappears (u-boot hands over), about 4.8 s after the boot
+starts.
 
-## 2. Images and tools
+This is not a partial capture:
 
-| image | md5 | what |
+- the endpoint is `init_log_partition_hdr(): init log partition header sucess!`,
+  which is the exact last line of every `uboot_log` slot on the device;
+- the boot's own `uboot_log` slot was dumped and compared -
+  **67 of 67 lines identical**.
+
+Both sides of that comparison ship with the repository, so the headline claim can
+be checked without a device at all:
+
+    python tools/verify_capture.py reference/uboot-log-p11-0.0.1.bin \
+                                    reference/usblog-0.0.1-full.bin
+    # -> host lines 67, device lines 67, mismatches 0
+
+Earlier images stopped after 240 bytes.  Why, and how that was found and fixed:
+section 4 and `docs/internals.md` section 4.
+
+---
+
+## 2. Quick start
+
+### Read the log
+
+Plug the watch in, then start the reader **before** powering it on (the port only
+exists while u-boot runs):
+
+    python tools/read_com_log.py AUTO 120 capture.bin     # Windows
+    python tools/usb_reader.py                            # Linux
+
+Then power-cycle the watch.  You should see `USB SERIAL PORT OPENED` within a
+second or two.
+
+### Flash the image
+
+With Android or recovery available (fastest):
+
+    adb push images/uboot-0.0.1.img /tmp/ub.img
+    adb shell "dd if=/tmp/ub.img of=/dev/block/mmcblk0p9 bs=4096; sync"
+    adb shell "dd if=/dev/block/mmcblk0p9 bs=4096 count=119 | head -c 484260 | md5sum"
+    # the md5 printed must be aa780e3b519d59aa65979def9b83eb44
+
+When the watch will not boot at all, use BROM download mode - force it off (hold
+the side button ~20 s), then hold the side button while plugging USB:
+
+    scc.exe fdl 1 0x5000 fdl 2 0x9EFFFE00 w uboot images\uboot-0.0.1.img rst
+
+`scc.exe` **must run in a real console** or its partition write aborts; see
+`docs/host-side.md` section 5, and `tools/concap.py` /
+`tools/scc_console.py` for the wrapper that gives it one and still logs it.
+
+---
+
+## 3. How it works, in one page
+
+```
+boot -> sub_9F01A49C brings up the U2S calibrate port
+          wait #1: host enumerated usb?          (3000 ms budget, [0x9F1CC11C])
+          wait #2: host opened the port?         (2000 ms budget, [0x9F1CC190])
+          allocate the 8 KB gserial ring
+          printf("USB SERIAL PORT OPENED")  <-- the trigger site
+      -> ... LCD init, vboot, RPMB, kernel load ...
+
+console path:   puts -> hook -> log fn -> reply_to_pctool(buf, len)
+                              -> write into the ring
+                              -> pump: wait for the IN-endpoint completion
+```
+
+The patch adds five things, all of them in the never-called fastboot unlock/lock
+handler body (`file 0x1BC34..0x1BED8`):
+
+1. **A `puts` hook** (`file 0xE798` -> `0x1BC9C`) that forwards every console
+   line to the calibrate port's ring.  The gate byte at `file 0x1BC34` is opened
+   by a stub on the `USB SERIAL PORT OPENED` printf, so logging starts exactly
+   when the channel exists.
+2. **A bounded pump**, so a host that stops reading can never park the boot.
+3. **No pctool command wait** - we never want u-boot to wait for input from us.
+4. **`usb_gate_wait`**: u-boot's own 2 s budget for "host opened the port" is
+   short - a Windows `sprdvcom` handle takes ~3.9 s to open - so the trigger stub
+   first polls the gser "port opened" flag (servicing the gadget) and exits the
+   instant the host opens the port.  Without a reader the boot pays at most
+   `WAIT_MS` (20 s); with one it pays nothing.
+5. **Chunked sends** - the fix described next.
+
+Full address-level detail, pseudocode for every injected block and the exact
+patch table: `docs/internals.md`.
+
+---
+
+## 4. The one rule: one max packet per `reply_to_pctool` call
+
+`reply_to_pctool` (file `0x1A8BC`) ends with **a single pump call waiting for a
+single IN-endpoint completion** - and one completion is **one 64-byte packet**.
+
+Hand it a longer buffer and the completion count and the pump count stop
+matching, the ring never drains again, and - because the pump is bounded - u-boot
+happily carries on booting while printing into a ring that nothing will ever
+read.  The silence is permanent, the device's own console output is unaffected,
+and the only symptom is "the log stops".
+
+So `uboot-0.0.1.img`'s log fn walks the string and calls `reply_to_pctool` once
+per **<= 63-byte piece**.
+
+### How it was found
+
+An earlier build delivered exactly 240 bytes and then nothing, every run.  Two
+measurements broke it open:
+
+**1. The link was fine.**  The reader watches COM-port presence while it reads.
+The port stayed enumerated for **4.8 s past the last byte** - that is u-boot
+finishing and jumping to the kernel - so nothing was torn down and no USB reset
+happened.  The device simply stopped handing data over.
+
+**2. The limit is per line, not cumulative.**  The nine lines that arrived are
+all `<= 46` bytes; the tenth is 70:
+
+| # | line | bytes |
 |---|---|---|
-| `images/uboot-0.0.10-chunked.img` | `aa780e3b...` | **current**: 0.0.5 + the log fn chunked to <= 63 bytes; **2608-byte complete live log, verified against the device's own uboot_log slot** |
-| `images/uboot-0.0.5-gatewait.img` | `38192ec8...` | hook + bounded pump + `usb_gate_wait`; still stops at 240 bytes (the 64-byte defect) |
-| `images/uboot-0.0.2.img` | `fb0186e8...` | 0.0.1 + correct gate address, bounded pump, no pctool wait |
-| `images/uboot-0.0.1.img` | `9a1d5975...` | the original verified release: console hook + forced channel allocation; 258 bytes captured |
-| `images/uboot.img` | `a03efc26...` | the unlock baseline every patch is built from - not a release |
+| 1 | `USB SERIAL PORT OPENED` | 23 |
+| 2 | `** File not found /recovery/last_memory **` | 43 |
+| 3 | `lcd start init time:2110ms` | 27 |
+| 4 | `sprd backlight power brightness=0` | 34 |
+| 5-8 | `phy status0/1/2 ...` | 16-17 |
+| 9 | `sprdfb: mipi_dispc_init_config not support TE` | 46 |
+| 10 | `co5300_readid read id value is 0x33,...,counter:0` | **70** |
 
-- `patch/make_log_images_010.py` - rebuild `images/uboot-0.0.10-chunked.img` from
-  the baseline (imports the 0.0.1/0.0.2/0.0.5 generators, so the whole stack is
-  reproducible from one command).
-- `tools/read_com_log.py` - **Windows** reader for the SPRD U2S port over the
-  `sprdvcom` COM interface: 1-byte blocking reads so a URB is always armed,
-  microsecond timestamps per line, and a once-a-second COM-port-presence poll
-  (that poll is what proved the gadget is not torn down when the log stops).
+A throwaway data-only image changed **only** the read-id format string
+(file `0x65259`) so line 10 printed 16 bytes instead of 70 - nothing else, no
+code, no layout.  Line 10 arrived, so did the two short lines after it, and the
+stream stopped again at the next long line (~70 bytes).  That is the proof.
 
-- `tools/usb_reader.py` - host reader (libusb via ctypes, no deps); accepts
-  only `1782:4d00` with `bcdDevice 0x2416`, sends DTR/RTS after claiming the
-  interface, and fsyncs every received chunk to disk.
-- `tools/dump_uboot_log.sh` - dump the uboot_log partition over adb and parse
-  it with `tools/parse_uboot_log.py` (section 5).
-- `tools/parse_uboot_log.py` - slot parser: header magic `0xABCD`, one 256 KB
-  slot per recorded boot.
-- `tools/mk_usb_node.sh` - keep `/dev/bus/usb` nodes alive inside a container;
-  without it the reader prints only `listen ...s` while `lsusb` already shows
-  the watch (see `docs/host-side.md` section 6).
-- `patch/make_log_images.py` - rebuild `images/uboot-0.0.1.img` from
-  `images/uboot.img`, with asserts on the baseline and an md5 self-check.
-  Verified 2026-09-28: it reproduces the released image byte for byte.
+---
 
-## 3. Known issues of 0.0.1 (all four fixed by 0.0.10)
+## 5. Build it yourself
 
-> **Resolved 2026-10-01.**  The 240-byte stop was *not* only the blocking pump.
-> With the pump bounded (0.0.2) the boot completed normally and the screen came
-> up, yet the host still received exactly 240 bytes and then nothing, while the
-> port stayed enumerated for another 4.8 s.  The real limit is the transfer
-> size: `reply_to_pctool` must never be handed more than one 64-byte max packet.
-> Measured, proved with a data-only probe image and fixed by chunking -
-> [`docs/root-cause-64-byte.md`](docs/root-cause-64-byte.md).  The four items
-> below are kept as history.
+    python3 patch/make_log_images.py                  # -> images/uboot-0.0.1.img
+    python3 patch/verify_image.py images/uboot-0.0.1.img
 
-- The boot stops right after `sprdfb: mipi_dispc_init_config not support TE`
-  and the screen stays dark.  The stall is between that print (file `0x3314C`,
-  the printf call; the string is loaded at `0x33140`) and the panel read-ID
-  printf call (file `0x3445C`; the format string
-  `co5300_readid read id value is 0x%x,...` is at file `0x65259`).
-  The cause is **not** the panel: the read-ID path retries at most 4 times and
-  every DSI wait is bounded, while the console send path this patch adds has no
-  timeout at all - the next console write after the TE line parks u-boot in the
-  USB wait.  Full IDA review:
-  [`docs/te-stall-analysis.md`](docs/te-stall-analysis.md).
-- The log path is blocking: `reply_to_pctool` (file `0x1A8BC`) calls the event
-  pump at file `0x2D2F0`, whose wait
-  `while ([0x9F1CC118] == 0) usb_gadget_handle_interrupts();`
-  (file `0x2D314`, VA `0x9F02D114`) has no timeout; the flag it waits for is set
-  only by the IN-endpoint completion callback (`gs_write_complete`, file
-  `0x2C464`), so u-boot blocks whenever the host stops draining EP 0x85.  This
-  is the defect behind the stall above - see `docs/te-stall-analysis.md`
-  sections 3 and 6.
-- The gate byte is addressed 0x200 too high by the injected code: the gate it
-  really uses is file `0x1BE34`, not `0x1BC34`.  That byte is the first byte of
-  `add x0,x0,#0x7b7` in the *next* dead function (the fastboot "unlock
-  bootloader" confirm handler, file `0x1BEDC..0x1BF87`), so a set gate turns
-  that instruction into `add x1,x0,#0x7b7`.  Benign today - both functions are
-  unreachable (no branch target, no pointer reference in the image) - but the
-  byte is not where the layout table in `docs/uboot-internals.md` places it,
-  and it must be fixed before the injected block is moved or extended.
-- Taking the "port opened" branch also runs the tool handshake waits
-  (`usb read timeout` shows up in the log), which adds about 8 s
-  (`lcd start init time` goes 4004 ms -> 12148 ms).
+`make_log_images.py` is self-contained: it starts from
+`images/uboot.img` (the **unlocked baseline**, md5 `a03efc26...`), asserts every
+original word it overwrites, and asserts the result against the released md5.  It
+either reproduces the verified image byte for byte or fails loudly.
 
-## 4. [0x30] must not be changed (mechanism)
+`verify_image.py` disassembles the injected blocks and resolves every branch
+target.  **Run it before flashing anything.**  Two mistakes in this patch are
+completely silent:
 
-vboot derives the tail security header location from it:
+- `str`/`ldr` unsigned-immediate forms take **bytes/8** in imm12, so
+  `str x23,[sp,#0x30]` written as `imm12 = 0x30` assembles to `[sp,#0x180]`;
+- the gate address constant must be `0xA34`, the **VA's** low 12 bits, not the
+  file offset's `0xC34`.  Get it wrong and the log fn never sees an open gate -
+  **not one byte of output**.
 
-    sechdr_offset = [0x30] + 0x200 = 0x760F0     (cert at 0x76150)
+### Hard constraints
 
-Changing [0x30] makes vboot read the wrong location -> **reset loop**.  This
-is the "screen lights up, then reboots after about 3.3 s" symptom (the LCD
-init runs before the vboot step, so the screen comes up first).  [0x30] must
-stay `0x75EF0` and the file length must not change (484260).
+- `[0x30]` must stay `0x75EF0`.  vboot derives the tail security header location
+  from it (`sechdr_offset = [0x30] + 0x200 = 0x760F0`); changing it makes the
+  watch reset-loop ~3.3 s after power-on - and since LCD init runs first, the
+  screen lights up, which makes it look like a display fault.
+- The file length must stay **484260**.
+- Injected code may only live in a function that normal boot never calls.
+  Free-looking zero regions are not safe: `0x5904C` looks unused and has no
+  static references, yet using it killed the device.
 
-## 5. uboot_log partition (only written for *successful* boots)
+---
 
-- `/dev/block/mmcblk0p11`, 4 MB = header + N x 256 KB slots; each slot is
-  the complete pre-kernel u-boot console log of one boot.
-- **Verified: a slot is only written when the boot completes successfully.**
-  A boot that stalls or resets at any step (including before the kernel
-  jump) leaves **no record at all**, so this partition cannot be used to
-  debug unbootable / stuck devices.  For those cases the live USB log is the
-  only channel (UART does not work on the DW99: 1.8 V vs 3.3 V levels).
-- Slots from successful boots contain lines like `rst_mode 40/0`,
-  `is_7s_reset`, `USB SERIAL CONFIGED`, `port open timeout`,
-  `battery unconnected shutdown charge`.
-- Dump it from recovery (adb root) with `tools/dump_uboot_log.sh`.
+## 6. Why the on-flash log cannot replace this
 
-## 6. Host-side notes and pitfalls
+`/dev/block/mmcblk0p11` (`uboot_log`, 4 MB) keeps one 256 KB slot per recorded
+boot, each containing the complete pre-kernel u-boot console log.  It is real and
+it is complete - for boots that **succeed**.
 
-- Device: `1782:4d00`, `bcdDevice 24.16` ("Gadget Serial", vendor class
-  0xff, EP5-IN = 0x85, 64-byte bulk).
-- After claiming the interface, send `SET_CONTROL_LINE_STATE` with **`wValue = 1`**
-  (DTR asserted, RTS clear).  The vendor `gser_setup` handler treats exactly `1`
-  as "port open" and **every other value - including `3` (DTR|RTS) - as "port
-  closed"**, so `wValue = 3` actively prevents u-boot from allocating the
-  channel (`docs/te-stall-analysis.md` section 4).  `tools/usb_reader.py` sends
-  `1` since 2026-09-28.
-- Address conversion: `VA = file + 0x9EFFFE00`; converting back,
-  `file = (VA - 0x9F000000) + 0x200`.  Forgetting the 0x200 is a classic
-  trap (it cost most of a day here).
-- If no data arrives, check the device side for `port open timeout`: that
-  means the gserial channel was never allocated.
-- Container gotcha: `/dev/bus/usb` does not survive a container restart, and a
-  device number changes on every re-enumeration.  Keep
-  `tools/mk_usb_node.sh` running in the background; details and the symptom in
-  `docs/host-side.md` section 6.
+**A boot that stalls or resets at any step leaves no record at all.**  That is
+exactly the case you need logs for, and it is why this project exists.  UART is
+not an option either: the DW99 UART is electrically unreachable (1.8 V vs 3.3 V
+levels).
 
-## 7. Versioning and history
+`uboot_log` is still valuable as ground truth for a boot that did complete, and
+`tools/verify_capture.py` automates exactly that comparison.
 
-- Versions are plain `MAJOR.MINOR.PATCH` from `CHANGELOG.md`; `0.0.1` is the
-  first kept version and is the former `v26` image, byte for byte.
-- v1..v25 and v27..v29 were **discarded** on 2026-09-28; their images are gone
-  from `images/`, and only the code that produces 0.0.1 is kept in `patch/`.
-- v1's claim of "verified, 3.7 KB of logs" cannot be reproduced: without the
-  channel-allocation patch there is no channel, and no host-side reader can
-  receive anything (see `FINDINGS-2026-09-26.md`).
-- Every image that touched `[0x30]` (v4/v5/v7/v12/v13) reset-looped - section 4.
-- History and traps: `docs/campaign-log.md`, `docs/uboot-internals.md`,
-  `FINDINGS-2026-09-26.md`.
+---
 
-## 8. Layout
+## 7. Repository layout
 
-- `images/` - the images; `patch/` - the generator for 0.0.1; `tools/` - host
-  tools;
-- `analysis/` - the corrected IDA listing (true runtime base,
-  `VA = file + 0x9EFFFE00`); `analysis/README.md` records what the old export got
-  wrong and how to re-export it if ever needed;
-- `docs/` - internals, campaign log, host side (index in `docs/README.md`);
-- `reference/` - two logs: `uart_readable.log` (115200 UART boot log of a
-  sibling watch of the same u-boot family) and `disavb_tos_8541e.log` (an
-  sfd_tool session: BROM -> FDL1/FDL2, the full 38-partition table - which
-  independently confirms `uboot_log` as partition 11 / 4 MB - and the
-  "disable AVB by patching trustos" run that produced the unlocked baseline).
+```
+images/
+  uboot.img                 the unlocked baseline everything is built from (a03efc26...)
+  uboot-0.0.1.img           the release: live USB log            (aa780e3b...)
+patch/
+  make_log_images.py        single self-contained generator -> images/uboot-0.0.1.img
+  verify_image.py           disassemble + check a built image before flashing
+tools/
+  read_com_log.py           Windows reader: U2S COM port, blocking reads, presence poll
+  usb_reader.py             Linux reader: libusb via ctypes, EP 0x85
+  verify_capture.py         compare a live capture against the device's uboot_log slot
+  concap.py                 run a console program in its own hidden console and scrape it
+  scc_console.py            one-shot wrapper around concap.py for scc.exe
+  parse_uboot_log.py        uboot_log slot parser (magic 0xABCD, 256 KB slots)
+  dump_uboot_log.sh         pull + parse uboot_log over adb
+  mk_usb_node.sh            keep /dev/bus/usb nodes alive inside a container
+docs/
+  internals.md              addresses, patch layout, pseudocode, the 64-byte rule, traps
+  host-side.md              reading (Windows/Linux), flashing, BROM recovery, pitfalls
+analysis/
+  uboot.asm                 corrected IDA listing at the true runtime base
+  README.md                 what the old export got wrong and how to re-export
+reference/
+  usblog-0.0.1-full.bin     the verified 2608-byte live capture
+  uboot-log-p11-0.0.1.bin   the device's own uboot_log partition, dumped over adb: the
+                            independent side of the 67/67 comparison above
+  uart_readable.log         115200 UART boot log of a sibling watch (same u-boot family)
+  disavb_tos_8541e.log      BROM session that produced the unlocked baseline; also the
+                            source of the 38-partition map (uboot = 9, uboot_bak = 10,
+                            uboot_log = 11)
+```
+
+---
+
+## 8. Troubleshooting
+
+| symptom | cause |
+|---|---|
+| no COM port at all | the port only exists while u-boot runs; unplug/replug and power-cycle, and start the reader first |
+| port appears but no bytes | the ring was never allocated - look for `usb calibrate port open timeout` in the device's own log; make sure the reader asserts **DTR only** (`SET_CONTROL_LINE_STATE wValue == 1`; `3` actively *closes* the port) |
+| log stops part-way, device keeps booting | a send exceeded one max packet (64 bytes) - see section 4 |
+| boot freezes / dark screen with a host attached | an unbounded wait somewhere in the log path; this image's pump is bounded on purpose |
+| `bcdDevice=2.02` | that is SPL / download / charge mode, not u-boot; you need `24.16` |
+| `scc.exe` prints `鍙戠敓閿欒: 鍙ユ焺鏃犳晥銆俙 right after `寮€濮嬪啓鍏boot鍒嗗尯` | it was started without a real console - see `docs/host-side.md` section 5 |
+
+---
 
 ## 9. License
 
 MIT, Copyright (c) 2026 Dunoguang - see [`LICENSE`](LICENSE).
+

@@ -1,14 +1,13 @@
-# Documentation index
+# docs
 
-| file | content |
-|---|---|
-| [uboot-internals.md](uboot-internals.md) | image layout, [0x30]/vboot, USB serial console flow, dead-code area, the gate-byte defect, VA<->file addressing |
-| [campaign-log.md](campaign-log.md) | v1..v29 history: every change, every result, and the traps |
-| [host-side.md](host-side.md) | USB descriptors, libusb reading, uboot_log partition, reference logs (UART + sfd_tool), sysdump lead |
-| [te-stall-analysis.md](te-stall-analysis.md) | IDA review of 0.0.1: where the boot stops after the TE line, why it is the blocking console send and not the panel, patch review, fix direction, experiments |
+- [`internals.md`](internals.md) - device side.  Addressing and the `+0x200`
+  trap, the hard constraints (`[0x30]`, image length), how the console comes up,
+  the console TX path, **the one rule: one max packet per `reply_to_pctool`
+  call**, the full patch layout, where patch code may live, and the traps.
+- [`host-side.md`](host-side.md) - host side.  Reading the log on Windows (COM)
+  and Linux (libusb), checking a capture against the device's own record,
+  flushing an image over adb or BROM, and the `scc.exe`-needs-a-real-console
+  trap that makes scripted flashing fail.
 
-Release notes: [`../CHANGELOG.md`](../CHANGELOG.md).
-
-Working recipe: `../README.md`.  One-page summary: `../FINDINGS-2026-09-26.md`.
-Raw material: [`../reference/`](../reference) (`uart_readable.log`,
-`disavb_tos_8541e.log`) and [`../analysis/uboot.asm`](../analysis/uboot.asm).
+Start with the [README](../README.md); it has the verified result, the quick
+start and a troubleshooting table.
