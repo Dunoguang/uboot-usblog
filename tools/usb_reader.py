@@ -43,7 +43,11 @@ Everything below is here because something went wrong without it.
 
 5.  The device disappears when u-boot hands over to the kernel, and comes back
     differently later, so re-enumerate rather than exiting.  Bus number and
-    device address change on every re-enumeration, so never cache them.
+    device address change on every re-enumeration, so never cache them - but do
+    remember the address that just died: after u-boot leaves, sysfs still lists
+    1782:4d00 for a moment while the kernel tears it down, and every call on it
+    returns LIBUSB_ERROR_IO.  Without that memo the reader re-opens, re-claims
+    and re-announces that corpse several times a second.
 
 6.  `/dev/bus/usb` may not exist at all.
     On a normal PC udev creates the nodes.  Inside a container, a chroot, or an
@@ -192,6 +196,7 @@ class Reader:
         self.made_nodes = set()
         self.cleared = False
         self.said_gone = False
+        self.dead_addr = None       # (bus, addr) that just died; skip until it moves
 
     # -- reporting ---------------------------------------------------------
     def t(self):
@@ -444,6 +449,7 @@ class Reader:
             found, seen = self.find()
             dev, dd, bus, addr = found
             if dev is None:
+                self.dead_addr = None        # gone for real; forget the corpse
                 for b, a, d in seen:
                     if d.idVendor == VID and d.idProduct == PID:
                         break
@@ -478,14 +484,22 @@ class Reader:
                 continue
 
             announced.clear()
+            if (bus, addr) == self.dead_addr:
+                # sysfs still lists it, the kernel already tore it down: every
+                # call returns IO.  Wait for it to disappear or come back with a
+                # new address instead of re-opening it five times a second.
+                time.sleep(POLL_DEVICE_S)
+                continue
             try:
                 ok = self.open(dev, dd, bus, addr)
             except Exception as e:                       # noqa: BLE001
                 self.say('setup raised %s: %s' % (type(e).__name__, e))
                 self.close()
+                self.dead_addr = (bus, addr)
                 time.sleep(0.5)
                 continue
             if not ok:
+                self.dead_addr = (bus, addr)
                 time.sleep(0.5)
                 continue
             if self.a.check:
@@ -495,6 +509,7 @@ class Reader:
             ok = self.read_until(deadline)
             self.close()
             if not ok:
+                self.dead_addr = (bus, addr)
                 time.sleep(POLL_DEVICE_S)
         self.say('done, %d bytes -> %s' % (self.total, self.a.out))
         return 0
