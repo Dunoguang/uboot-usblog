@@ -54,6 +54,16 @@ Everything below is here because something went wrong without it.
     reader creates the node itself from sysfs before opening - usb_device is
     major 189, and the minor is `(bus - 1) * 128 + devnum - 1`.  Needs root or
     CAP_MKNOD; `--no-mknod` turns it off.
+
+7.  Send exactly ONE control request, and send it last.
+    `gser_setup` handles `bRequest == 0x22` and returns `-EOPNOTSUPP` for
+    everything else, so `SET_LINE_CODING` (0x20) and `clear_halt`'s
+    `CLEAR_FEATURE` both stall and burn a full timeout each.  Measured on the
+    watch: 1.0 s and 2.9 s - and u-boot only spends about 4 s between the port
+    opening and handing over to the kernel, so that wasted the entire boot.
+    So: one `SET_CONTROL_LINE_STATE wValue = 1` with a 200 ms timeout, then read
+    immediately.  `SET_LINE_CODING` is behind `--line-coding`; an endpoint halt
+    is cleared lazily, only if a transfer actually reports `LIBUSB_ERROR_PIPE`.
 """
 from __future__ import annotations
 
@@ -180,6 +190,8 @@ class Reader:
         self.out = None
         self.warned_mknod = False
         self.made_nodes = set()
+        self.cleared = False
+        self.said_gone = False
 
     # -- reporting ---------------------------------------------------------
     def t(self):
@@ -281,6 +293,8 @@ class Reader:
             return False
         self.handle = h
         self.dd = dd
+        self.cleared = False
+        self.said_gone = False
 
         def s(idx):
             """String descriptor as text.  Never let a weird descriptor kill
@@ -323,22 +337,36 @@ class Reader:
         self.say('claimed interface %d' % IFACE)
 
         # point 1: wValue MUST be 1.  Anything else CLOSES the port.
-        rc = L.libusb_control_transfer(h, 0x21, 0x22, 1, IFACE, None, 0, 1000)
+        # Short timeout: u-boot answers a handled request in microseconds, so a
+        # slow return means it is not handling it at all - and every millisecond
+        # spent here is a millisecond of console output we are not draining.
+        rc = L.libusb_control_transfer(h, 0x21, 0x22, 1, IFACE, None, 0, 200)
         self.say('SET_CONTROL_LINE_STATE wValue=1 -> %s' % errname(rc)
                  + ('' if rc == 0 else '   (the port will NOT open)'))
-        # 115200 8N1, the console's line coding
-        code = (ctypes.c_ubyte * 7)(0x00, 0xC2, 0x01, 0x00, 0x00, 0x00, 0x08)
-        rc = L.libusb_control_transfer(h, 0x21, 0x20, 0, IFACE, code, 7, 1000)
-        self.say('SET_LINE_CODING 115200 8N1 -> %s' % errname(rc))
         self.last_dtr = time.time()
 
-        ch = L.libusb_clear_halt(h, EP_IN)
-        if ch != 0:
-            self.say('clear_halt(0x%02x) -> %s (continuing)' % (EP_IN, errname(ch)))
+        # Deliberately NOT done here, each for a measured reason:
+        #
+        #   SET_LINE_CODING (0x20)
+        #       u-boot's gser_setup handles exactly one class request, 0x22, and
+        #       returns -EOPNOTSUPP for everything else, so this stalls and costs
+        #       a full timeout - measured 1.0 s of the ~4 s u-boot spends between
+        #       the port opening and handing over to the kernel.  Enable with
+        #       --line-coding only if some other gadget needs it.
+        #
+        #   clear_halt(0x85)
+        #       Also an unhandled control request: measured 2.9 s.  A halt is
+        #       cleared lazily instead, the first time a transfer actually
+        #       reports a stall (LIBUSB_ERROR_PIPE).
+        if self.a.line_coding:
+            code = (ctypes.c_ubyte * 7)(0x00, 0xC2, 0x01, 0x00, 0x00, 0x00, 0x08)
+            rc = L.libusb_control_transfer(h, 0x21, 0x20, 0, IFACE, code, 7, 200)
+            self.say('SET_LINE_CODING 115200 8N1 -> %s' % errname(rc))
 
         if self.out is None:
             self.out = open(self.a.out, 'wb', buffering=0)
-        self.say('reading EP 0x%02x -> %s   (Ctrl-C to stop)' % (EP_IN, self.a.out))
+        self.say('reading EP 0x%02x immediately -> %s   (Ctrl-C to stop)'
+                 % (EP_IN, self.a.out))
         return True
 
     def close(self):
@@ -370,9 +398,10 @@ class Reader:
         keepalive = self.last_dtr + KEEPALIVE_S
         while time.time() < deadline:
             if time.time() >= keepalive:
-                # re-assert; gser_setup's flag is idempotent for wValue == 1
+                # re-assert; gser_setup's flag is idempotent for wValue == 1.
+                # Short timeout - a slow answer here would cost log, not gain it.
                 L.libusb_control_transfer(self.handle, 0x21, 0x22, 1, IFACE,
-                                          None, 0, 500)
+                                          None, 0, 200)
                 keepalive = time.time() + KEEPALIVE_S
             rc = L.libusb_bulk_transfer(self.handle, EP_IN,
                                         ctypes.cast(self.buf, ctypes.c_void_p),
@@ -388,12 +417,22 @@ class Reader:
                 continue
             if rc == -7:                       # timeout: nothing to read, fine
                 continue
-            if rc in (-4, -1, -9):             # gone / io error / stall
-                self.say('device stopped answering (%s) - u-boot has probably '
-                         'handed over to the kernel' % errname(rc))
+            if rc == -9:                       # stall: clear it, then carry on
+                if not self.cleared:
+                    self.cleared = True
+                    self.say('endpoint stalled, clearing halt')
+                L.libusb_clear_halt(self.handle, EP_IN)
+                continue
+            if rc in (-4, -1):
+                # u-boot tore the gadget down and jumped to the kernel, or the
+                # watch was unplugged.  Say it once, not once per poll.
+                if not self.said_gone:
+                    self.said_gone = True
+                    self.say('device stopped answering (%s) - u-boot has handed '
+                             'over to the kernel (%d bytes captured)'
+                             % (errname(rc), self.total))
                 return False
-            self.say('bulk read: %s (clearing halt)' % errname(rc))
-            L.libusb_clear_halt(self.handle, EP_IN)
+            self.say('bulk read: %s' % errname(rc))
             time.sleep(0.05)
         return True
 
@@ -502,6 +541,8 @@ def main():
                     help='list USB devices and exit')
     ap.add_argument('--no-mknod', action='store_true',
                     help='do not create missing /dev/bus/usb nodes')
+    ap.add_argument('--line-coding', action='store_true',
+                    help='also send SET_LINE_CODING (u-boot stalls it, costs ~1 s)')
     a = ap.parse_args()
 
     r = Reader(a)
