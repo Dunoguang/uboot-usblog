@@ -73,7 +73,12 @@ Plug the watch in, then start the reader **before** powering it on (the port onl
 exists while u-boot runs):
 
     python tools/read_com_log.py AUTO 120 capture.bin     # Windows
-    python tools/usb_reader.py                            # Linux
+    sudo python3 tools/usb_reader.py -t 120 -o capture.bin  # Linux
+
+On Linux, `usb_reader.py --list` shows what USB devices are visible (including
+whether the watch is sitting in download mode instead of u-boot), and
+`usb_reader.py --check` performs the whole setup - detach, claim, control
+requests - and reports, without reading anything.
 
 Then power-cycle the watch.  You should see `USB SERIAL PORT OPENED` within a
 second or two.

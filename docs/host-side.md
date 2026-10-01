@@ -45,16 +45,40 @@ is written to the output file.
 
 ## 3. Linux: read the endpoint directly
 
-    python tools/usb_reader.py            # see the file for options
+    sudo python3 tools/usb_reader.py -t 120 -o capture.bin
+    sudo python3 tools/usb_reader.py --list      # what is on the bus right now
+    sudo python3 tools/usb_reader.py --check     # set up and report, read nothing
 
-libusb via ctypes, no third-party dependencies.  Claims interface 0, sends
-`SET_CONTROL_LINE_STATE` with **`wValue = 1`** (section 5), then reads EP 0x85 in
-64-byte chunks, flushing and fsyncing every chunk so a hang never loses data.
-`rc=-7` means the endpoint is alive but idle.
+libusb-1.0 through ctypes, no third-party dependencies.  It re-enumerates on
+every pass rather than caching bus/address (both change on re-enumeration), so it
+survives the device disappearing when u-boot hands over to the kernel, and it can
+be left running across power cycles.
+
+Four things in it are load-bearing; each is there because something failed
+without it.
+
+- **`SET_CONTROL_LINE_STATE` carries `wValue = 1`** (DTR asserted, RTS clear).
+  `gser_setup` reads exactly `1` as "port open" and *every other value, including
+  `3`, as "port closed"* - a reader that sends `3` closes the port it is trying
+  to open, the port-open wait times out, and the gserial ring may never be
+  allocated.  `usb_reader.py` re-asserts it every 2 s while reading.  If you
+  write your own, this is the first thing to get right.
+- **The interface is really claimed.**  Auto-detach, then an explicit
+  `detach_kernel_driver` on `LIBUSB_ERROR_BUSY`, and the claim result is checked
+  instead of printed and ignored.  A silent failure here produces exactly the
+  "no bytes at all" symptom.
+- **A read is pending essentially all the time.**  The console send waits for an
+  IN-endpoint completion, which only happens while the host has a transfer
+  outstanding; a short per-read timeout makes libusb cancel and re-arm the URB
+  constantly and the device pays for each one.
+- **`bcdDevice` is checked and reported.**  u-boot and the download agent share
+  VID:PID; `0x2416` is u-boot, `0x0202` is SPL / download / charge mode and will
+  never produce a log.  The reader says which one it found instead of spinning
+  silently.
 
 `tools/mk_usb_node.sh` keeps `/dev/bus/usb` nodes alive inside a container.
-Symptom without it: the reader prints only `listen ...s` while `lsusb` already
-shows the watch.
+Symptom without it: the reader prints only `no 1782:4d00 device`, while `lsusb`
+already shows the watch.
 
 ## 4. Checking a capture without trusting it
 
