@@ -2,6 +2,18 @@
 
 All notable changes to the DW99 / vp19 u-boot USB-log image.
 
+## [Unreleased]
+
+### Added
+
+- `auto/` - automatic anchor-location + patch-injection toolchain
+  (`python3 auto/usblog.py patch <baseline.img>`).  Locates every anchor from
+  byte-level evidence only (string refs + atomic asserts, rigid deltas,
+  bl-target chains, masked word templates, dead-zone scans), then builds,
+  verifies and audits the image.  Reproduces the four known products byte for
+  byte (aa780e3b / 41edd1b4 / 3eefc377 / e5badc44) and has been cross-checked
+  on unseen builds; see `auto/README.md`.
+
 ## [0.0.1] - 2026-10-01
 
 The first release, and the only image this repository ships.

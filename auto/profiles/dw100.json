@@ -1,0 +1,40 @@
+{
+ "name": "dw100",
+ "image": "/root/usblog-patch-transplant-dw100/uboot-unlock-bootloader.img",
+ "image_len": 1048576,
+ "image_md5": "29bf2c0adcc5f9a3e735836370769d5a",
+ "dhtb30": "0x75A90",
+ "anchors": {
+  "PUTS": "0xe770",
+  "PUTS_BODY": "0xe774",
+  "TRIG": "0x1a740",
+  "FORCE_PORT": "0x1a6f8",
+  "RET1": "0x1a73c",
+  "PUMP_CALL": "0x1a8c8",
+  "HOOK_BL": "0x1bc9c",
+  "REPLY": "0x1a894",
+  "PRINTF": "0x9f00e5b0",
+  "GETTIMER": "0x9f00184c",
+  "IRQ": "0x9f030c94",
+  "STOCK_PUMP": "0x9f02d0e4",
+  "FLAG_TX": "0x9f1cc098",
+  "PORTFLAG": "0x9f1cc110",
+  "FLAG": "0x1bc28",
+  "S1": "0x1bc2c",
+  "LOG": "0x1bc40",
+  "HOOK": "0x1bc90",
+  "PUMP": "0x1bcb4",
+  "GATE_WAIT": "0x1bcf4",
+  "S2": "0x1bd44",
+  "LOG2": "0x1bd74",
+  "DEAD_END": "0x1becc"
+ },
+ "content_end": "0x760a4",
+ "product_name": "uboot-unlock-bootloader-usblog.img",
+ "product_md5": "e5badc44d778ce613e91a09628f0c0c3",
+ "constants": {
+  "CHUNK": 63,
+  "BUDGET": 10000,
+  "WAIT_MS": 20000
+ }
+}

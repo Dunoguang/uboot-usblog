@@ -1,0 +1,40 @@
+{
+ "name": "vp19",
+ "image": "/root/github/uboot-usblog/images/uboot.img",
+ "image_len": 484260,
+ "image_md5": "a03efc263613a61680e892261df90954",
+ "dhtb30": "0x75EF0",
+ "anchors": {
+  "PUTS": "0xe798",
+  "PUTS_BODY": "0xe79c",
+  "TRIG": "0x1a768",
+  "FORCE_PORT": "0x1a720",
+  "RET1": "0x1a764",
+  "PUMP_CALL": "0x1a8f0",
+  "HOOK_BL": "0x1bca8",
+  "REPLY": "0x1a8bc",
+  "PRINTF": "0x9f00e5d8",
+  "GETTIMER": "0x9f00184c",
+  "IRQ": "0x9f030ca0",
+  "STOCK_PUMP": "0x9f02d0f0",
+  "FLAG_TX": "0x9f1cc118",
+  "PORTFLAG": "0x9f1cc190",
+  "FLAG": "0x1bc34",
+  "S1": "0x1bc38",
+  "LOG": "0x1bc4c",
+  "HOOK": "0x1bc9c",
+  "PUMP": "0x1bcc0",
+  "GATE_WAIT": "0x1bd00",
+  "S2": "0x1bd50",
+  "LOG2": "0x1bd80",
+  "DEAD_END": "0x1bed8"
+ },
+ "content_end": "0x763a4",
+ "product_name": "uboot-0.0.1.img",
+ "product_md5": "aa780e3b519d59aa65979def9b83eb44",
+ "constants": {
+  "CHUNK": 63,
+  "BUDGET": 10000,
+  "WAIT_MS": 20000
+ }
+}

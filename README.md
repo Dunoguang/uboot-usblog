@@ -208,6 +208,20 @@ completely silent:
   file offset's `0xC34`.  Get it wrong and the log fn never sees an open gate -
   **not one byte of output**.
 
+### Any other build in this family?  Use `auto/`
+
+`auto/` is the fully automatic successor of the hand-ported per-device
+generators.  Given any baseline image of this u-boot family it *locates every
+anchor from byte-level evidence* - no IDA, no symbols, pure python - then
+builds, verifies and audits the patched image:
+
+    cd auto && python3 usblog.py patch <baseline.img>
+
+It reproduces the 0.0.1 image byte for byte from the same baseline, and has
+been cross-checked on unseen builds: a third-party-unlocked ai3 image comes out
+identical to its hand-made product, and the vp19/ai3/dw99/dw100 regression runs
+`0 fails`.  See `auto/README.md` for the anchor chain and the profile format.
+
 ### Hard constraints
 
 - `[0x30]` must stay `0x75EF0`.  vboot derives the tail security header location
@@ -246,6 +260,12 @@ images/
 patch/
   make_log_images.py        single self-contained generator -> images/uboot-0.0.1.img
   verify_image.py           disassemble + check a built image before flashing
+auto/
+  usblog.py                 automatic anchor location + patch injection:
+                            find / patch / verify / audit / regress
+  lib/                      byte-level finder, unified builder, verifier, diff audit
+  profiles/                 anchor tables for vp19 / ai3 / dw99 / dw100 + templates
+  tests/                    four-device regression + unseen-image cross-check
 tools/
   read_com_log.py           Windows reader: U2S COM port, blocking reads, presence poll
   usb_reader.py             Linux reader: libusb via ctypes, EP 0x85; creates the

@@ -1,0 +1,40 @@
+{
+ "name": "ai3",
+ "image": "/root/usblog-patch-transplant-ai3/uboot.bin",
+ "image_len": 1048576,
+ "image_md5": "9527c46bda13e468864f3c463f34ee37",
+ "dhtb30": "0x75E90",
+ "anchors": {
+  "PUTS": "0xe790",
+  "PUTS_BODY": "0xe794",
+  "TRIG": "0x1a770",
+  "FORCE_PORT": "0x1a728",
+  "RET1": "0x1a76c",
+  "PUMP_CALL": "0x1a8f8",
+  "HOOK_BL": "0x1bccc",
+  "REPLY": "0x1a8c4",
+  "PRINTF": "0x9f00e5d0",
+  "GETTIMER": "0x9f00184c",
+  "IRQ": "0x9f030cf4",
+  "STOCK_PUMP": "0x9f02d144",
+  "FLAG_TX": "0x9f1cc098",
+  "PORTFLAG": "0x9f1cc110",
+  "FLAG": "0x1bc58",
+  "S1": "0x1bc5c",
+  "LOG": "0x1bc70",
+  "HOOK": "0x1bcc0",
+  "PUMP": "0x1bce4",
+  "GATE_WAIT": "0x1bd24",
+  "S2": "0x1bd74",
+  "LOG2": "0x1bda4",
+  "DEAD_END": "0x1befc"
+ },
+ "content_end": "0x76344",
+ "product_name": "uboot-usblog.bin",
+ "product_md5": "41edd1b4020fa166f6cf775e49b76b50",
+ "constants": {
+  "CHUNK": 63,
+  "BUDGET": 10000,
+  "WAIT_MS": 20000
+ }
+}
